@@ -1,0 +1,37 @@
+METROPOLITAN UNIVERSITY HOSPITAL & CLINICS
+Department of Specialty Medicine & Rheumatology · Provider NPI: 1948201938
+================================================================================
+
+OFFICIAL CLINICAL ENCOUNTER ORDER & PRESCRIPTION
+
+PATIENT INFORMATION:
+• Patient Name: Johnathan E. Miller
+• DOB: 10/14/1982
+• MRN: MUH-992810
+• Encounter Date: November 12, 2026
+• Primary Insurer: UnitedHealthcare (Choice Plus PPO)
+• Ordering Physician: Dr. Marcus Vance, MD (Specialty: Rheumatology)
+
+PRIMARY CLINICAL DIAGNOSES (ICD-10):
+1. M05.79 - Rheumatoid Arthritis with rheumatoid factor of multiple sites without organ involvement (Primary)
+2. K50.90 - Crohn's disease, unspecified, without complications (Secondary)
+
+PRESCRIBED SPECIALTY ORDER / MEDICATION:
+• Drug Code: HUMIRA (HCPCS J0135 / NDC 0074-4339-02)
+• Drug Name: Humira (Adalimumab) 40 mg/0.4 mL Subcutaneous Prefilled Pen
+• Dosage & Directions: Inject 40 mg subcutaneously once every 14 days.
+• Quantity: 2 prefilled autoinjector pens (30-day supply)
+• Refills: 3
+
+CLINICAL DOCUMENTATION & PRE-AUTHORIZATION STATUS:
+• Prior Authorization: PENDING / NOT ATTACHED (Pre-service insurer clinical review required)
+• Attached Documentation:
+  - Rheumatology Clinical Encounter Notes
+  - Baseline TB QuantiFERON Negative Lab Panel
+  - Prior 6-month Oral Methotrexate Failure Record
+• Clinical Justification: Patient exhibits persistent severe disease activity (DAS28 = 5.2) despite optimal oral DMARD therapy. Escalation to targeted TNF inhibitor biologic (Humira) is medically indicated.
+
+PHYSICIAN ELECTRONIC SIGNATURE:
+Dr. Marcus Vance, MD (Auth #8829-10294)
+Board Certified Rheumatology & Internal Medicine
+Date: 11/12/2026 09:42 AM EST
