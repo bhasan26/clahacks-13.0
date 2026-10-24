@@ -38,10 +38,11 @@ class DataStore:
         self.audit_log: List[dict] = []
         self.clean_claims_target: float = 85.0  # Editable by admin
         self.is_check_failed: bool = False
-        self.last_check_time: str = "06:00 today"
+        self.last_check_time: str = "Live"
         self.run_check_count: int = 0
 
-        self.reset_demo_state()
+        # Start clean by default with zero demo entries
+        self.reset_state(seed_demo=False)
 
     def record_audit(self, action: str, details: dict, actor: str = "system"):
         entry = {
@@ -54,8 +55,14 @@ class DataStore:
         self.audit_log.append(entry)
         return entry
 
-    def reset_demo_state(self):
-        """Reset data back to pristine baseline with 40 cases across 5 specialties."""
+    def clear_demo_entries(self):
+        """Purges all demo entries and caseload cases."""
+        self.cases.clear()
+        self.updates.clear()
+        self.record_audit("DEMO_ENTRIES_CLEARED", {"cases_count": 0}, actor="claims-officer")
+
+    def reset_state(self, seed_demo: bool = False):
+        """Reset data state. By default seed_demo=False (clean slate)."""
         self.rules.clear()
         self.bulletins.clear()
         self.cases.clear()
@@ -63,11 +70,20 @@ class DataStore:
         self.audit_log.clear()
         self.clean_claims_target = 85.0
         self.is_check_failed = False
-        self.last_check_time = "06:00 today"
+        self.last_check_time = "Live"
         self.run_check_count = 0
 
-        # -------------------------------------------------------------
-        # 1. Official Insurer Bulletins & Payer Rules
+        self.load_rules_and_bulletins()
+
+        if seed_demo:
+            self.load_demo_cases_and_updates()
+
+    def reset_demo_state(self):
+        """Reset data back to demo baseline with 40 cases (used by test runners)."""
+        self.reset_state(seed_demo=True)
+
+    def load_rules_and_bulletins(self):
+        """Loads official insurer bulletins and versioned payer rules."""
         # -------------------------------------------------------------
         b1 = PolicyBulletin(
             rule_id="AETNA-CPB-0645",
@@ -356,10 +372,10 @@ class DataStore:
         )
         self.rules[f"{r_uhc_knee.rule_id}_v{r_uhc_knee.version}"] = r_uhc_knee
 
+    def load_demo_cases_and_updates(self):
+        """Loads optional mock seed data for QA/test runners."""
         # -------------------------------------------------------------
-        # 2. Seed 40 Cases Across 5 Specialties
-        # Baseline Statuses: 28 Approved, 7 Needs attention, 5 Missing or wrong info
-        # Clean claims = 28 / 40 = 70% (below target of 85%)
+        # Seed 40 Cases Across 5 Specialties (Used for QA evaluation)
         # -------------------------------------------------------------
         raw_cases = [
             # --- CARDIOLOGY (10 cases) ---

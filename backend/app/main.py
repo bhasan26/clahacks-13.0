@@ -482,9 +482,17 @@ def insurer_rule_changes(since: Optional[str] = None):
     }
 
 
+@app.delete("/api/cases")
+@app.post("/api/cases/clear")
+def clear_cases():
+    """Deletes all demo entries and clears caseload."""
+    store.clear_demo_entries()
+    return {"success": True, "message": "All demo entries deleted. Caseload is now empty."}
+
+
 @app.post("/api/simulator/reset")
 @app.post("/api/simulate/reset")
-def reset_demo():
-    """Instantly resets back to initial seed data."""
-    store.reset_demo_state()
-    return {"success": True, "message": "Demo state reset to baseline."}
+def reset_demo(seed_demo: bool = Query(True, description="Seed mock demo cases")):
+    """Resets data. If seed_demo=True, loads 40 test cases for QA test runners."""
+    store.reset_state(seed_demo=seed_demo)
+    return {"success": True, "message": f"Demo state reset (seed_demo={seed_demo})."}

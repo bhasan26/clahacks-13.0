@@ -241,12 +241,14 @@ export function App() {
         }}
       />
 
-      {/* 1-Click Floating Control Bar for Demo / Testing */}
-      <DemoControlDock
-        onRunCheckNow={handleRunCheckNow}
-        onToggleFail={handleToggleFail}
-        onReset={handleResetDemo}
-      />
+      {/* Floating Control Bar (only visible when requested via ?demo=true) */}
+      {typeof window !== 'undefined' && window.location.search.includes('demo=true') && (
+        <DemoControlDock
+          onRunCheckNow={handleRunCheckNow}
+          onToggleFail={handleToggleFail}
+          onReset={handleResetDemo}
+        />
+      )}
     </div>
   );
 }

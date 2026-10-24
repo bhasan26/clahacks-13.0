@@ -140,8 +140,26 @@ export const CasesPage: React.FC<CasesPageProps> = ({
             <tbody className="divide-y divide-[#EAEFEA]">
               {filteredCases.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-12 text-center text-xs text-[#12544F]/60">
-                    No cases match the selected filters.
+                  <td colSpan={4} className="py-16 text-center text-xs text-[#12544F]/70">
+                    <div className="max-w-sm mx-auto space-y-2">
+                      <p className="font-bold text-sm text-[#092328]">
+                        {cases.length === 0 ? 'No cases in caseload yet' : 'No cases match the selected filters'}
+                      </p>
+                      <p className="text-[#698579] text-xs">
+                        {cases.length === 0
+                          ? 'Demo entries deleted. File or upload a patient case to run a real-time coverage audit.'
+                          : 'Try selecting a different specialty or status filter.'}
+                      </p>
+                      {cases.length === 0 && (
+                        <button
+                          type="button"
+                          onClick={onOpenUploadModal}
+                          className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#2A835F] text-white text-xs font-bold hover:bg-[#1F6347] transition-all shadow-sm cursor-pointer"
+                        >
+                          + File Patient Case
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (

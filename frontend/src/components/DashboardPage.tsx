@@ -219,55 +219,62 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
           {/* Horizontal Bars, sorted by count descending */}
           <div className="space-y-3 pt-1">
-            {specialties.map((item) => {
-              const total = item.total;
-              const appPct = total > 0 ? (item.approved / total) * 100 : 0;
-              const naPct = total > 0 ? (item.needs_attention / total) * 100 : 0;
-              const mwiPct = total > 0 ? (item.missing_or_wrong_info / total) * 100 : 0;
+            {!specialties.some((s) => s.total > 0) ? (
+              <div className="py-8 text-center text-xs text-[#698579] space-y-1">
+                <p className="font-semibold text-[#092328]">No active caseload entries</p>
+                <p>Upload a clinical file to populate specialty statistics.</p>
+              </div>
+            ) : (
+              specialties.filter((s) => s.total > 0).map((item) => {
+                const total = item.total;
+                const appPct = total > 0 ? (item.approved / total) * 100 : 0;
+                const naPct = total > 0 ? (item.needs_attention / total) * 100 : 0;
+                const mwiPct = total > 0 ? (item.missing_or_wrong_info / total) * 100 : 0;
 
-              return (
-                <div
-                  key={item.specialty}
-                  onClick={() => onNavigateToCasesWithFilter && onNavigateToCasesWithFilter(undefined, item.specialty)}
-                  className="space-y-1 cursor-pointer group"
-                  title={`View ${item.specialty} cases`}
-                >
-                  <div className="flex justify-between text-xs font-semibold text-[#092328]">
-                    <span className="group-hover:text-[#2A835F] transition-colors">
-                      {item.specialty}
-                    </span>
-                    <span className="font-bold text-[#12544F]">
-                      {item.total}
-                    </span>
-                  </div>
+                return (
+                  <div
+                    key={item.specialty}
+                    onClick={() => onNavigateToCasesWithFilter && onNavigateToCasesWithFilter(undefined, item.specialty)}
+                    className="space-y-1 cursor-pointer group"
+                    title={`View ${item.specialty} cases`}
+                  >
+                    <div className="flex justify-between text-xs font-semibold text-[#092328]">
+                      <span className="group-hover:text-[#2A835F] transition-colors">
+                        {item.specialty}
+                      </span>
+                      <span className="font-bold text-[#12544F]">
+                        {item.total}
+                      </span>
+                    </div>
 
-                  {/* Split horizontal bar using exact same 3 colors */}
-                  <div className="w-full h-3 bg-[#F0F5F2] rounded-full overflow-hidden flex border border-[#D8E5DC]">
-                    {item.approved > 0 && (
-                      <div
-                        style={{ width: `${appPct}%` }}
-                        className="h-full bg-[#2A835F]"
-                        title={`Approved: ${item.approved}`}
-                      />
-                    )}
-                    {item.needs_attention > 0 && (
-                      <div
-                        style={{ width: `${naPct}%` }}
-                        className="h-full bg-[#D97706]"
-                        title={`Needs attention: ${item.needs_attention}`}
-                      />
-                    )}
-                    {item.missing_or_wrong_info > 0 && (
-                      <div
-                        style={{ width: `${mwiPct}%` }}
-                        className="h-full bg-[#DC2626]"
-                        title={`Missing or wrong info: ${item.missing_or_wrong_info}`}
-                      />
-                    )}
+                    {/* Split horizontal bar using exact same 3 colors */}
+                    <div className="w-full h-3 bg-[#F0F5F2] rounded-full overflow-hidden flex border border-[#D8E5DC]">
+                      {item.approved > 0 && (
+                        <div
+                          style={{ width: `${appPct}%` }}
+                          className="h-full bg-[#2A835F]"
+                          title={`Approved: ${item.approved}`}
+                        />
+                      )}
+                      {item.needs_attention > 0 && (
+                        <div
+                          style={{ width: `${naPct}%` }}
+                          className="h-full bg-[#D97706]"
+                          title={`Needs attention: ${item.needs_attention}`}
+                        />
+                      )}
+                      {item.missing_or_wrong_info > 0 && (
+                        <div
+                          style={{ width: `${mwiPct}%` }}
+                          className="h-full bg-[#DC2626]"
+                          title={`Missing or wrong info: ${item.missing_or_wrong_info}`}
+                        />
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       </div>
@@ -288,35 +295,41 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </button>
         </div>
 
-        {/* 3 Most Recent Updates - One line each: what changed, effective date, number of open cases affected */}
+        {/* 3 Most Recent Updates */}
         <div className="space-y-3">
-          {latest_updates.map((update) => (
-            <div
-              key={update.update_id}
-              onClick={onNavigateToUpdates}
-              className="flex flex-col sm:flex-row sm:items-center justify-between text-xs py-2 px-3 rounded-xl hover:bg-[#F0F5F2] transition-colors cursor-pointer border border-transparent hover:border-[#D8E5DC]"
-            >
-              {/* What changed */}
-              <div className="font-semibold text-[#092328] flex-1 pr-4 truncate">
-                {update.headline}
-              </div>
-
-              {/* Effective date and number of open cases affected */}
-              <div className="flex items-center space-x-4 shrink-0 text-[#12544F]/80 mt-1 sm:mt-0 font-medium">
-                <span>Effective {update.effective_date}</span>
-                <span>·</span>
-                <span
-                  className={
-                    update.affected_cases_count > 0
-                      ? 'font-bold text-[#D97706]'
-                      : 'text-[#12544F]/60'
-                  }
-                >
-                  Affects {update.affected_cases_count} open {update.affected_cases_count === 1 ? 'case' : 'cases'}
-                </span>
-              </div>
+          {latest_updates.length === 0 ? (
+            <div className="py-6 text-center text-xs text-[#698579]">
+              No active policy circular notifications.
             </div>
-          ))}
+          ) : (
+            latest_updates.map((update) => (
+              <div
+                key={update.update_id}
+                onClick={onNavigateToUpdates}
+                className="flex flex-col sm:flex-row sm:items-center justify-between text-xs py-2 px-3 rounded-xl hover:bg-[#F0F5F2] transition-colors cursor-pointer border border-transparent hover:border-[#D8E5DC]"
+              >
+                {/* What changed */}
+                <div className="font-semibold text-[#092328] flex-1 pr-4 truncate">
+                  {update.headline}
+                </div>
+
+                {/* Effective date and number of open cases affected */}
+                <div className="flex items-center space-x-4 shrink-0 text-[#12544F]/80 mt-1 sm:mt-0 font-medium">
+                  <span>Effective {update.effective_date}</span>
+                  <span>·</span>
+                  <span
+                    className={
+                      update.affected_cases_count > 0
+                        ? 'font-bold text-[#D97706]'
+                        : 'text-[#12544F]/60'
+                    }
+                  >
+                    Affects {update.affected_cases_count} open {update.affected_cases_count === 1 ? 'case' : 'cases'}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

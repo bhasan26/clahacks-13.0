@@ -16,7 +16,6 @@ const INSURER_DROPDOWN_OPTIONS = [
   { id: 'bcbs', name: 'Blue Cross Blue Shield (BCBS)' },
   { id: 'cigna', name: 'Cigna Healthcare' },
   { id: 'cms', name: 'Medicare / CMS' },
-  { id: 'demo-insurer', name: 'Demo Insurance Co.' },
 ];
 
 export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
@@ -87,35 +86,6 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
     }
   };
 
-  // Quick 1-Click Real Presets
-  const handleSelectPreset = async (sampleId: 'aetna_keytruda' | 'bcbs_ozempic' | 'uhc_ortho') => {
-    setIsAnalyzing(true);
-    setAnalysisError(null);
-    setAnalysisResult(null);
-
-    if (sampleId === 'aetna_keytruda') {
-      setSelectedInsurer('aetna');
-      setCardFileName('aetna_open_choice_card.png');
-      setClinicalFileName('dr_evans_oncology_rx_keytruda.pdf');
-    } else if (sampleId === 'bcbs_ozempic') {
-      setSelectedInsurer('bcbs');
-      setCardFileName('bcbs_fep_card.png');
-      setClinicalFileName('endocrinology_ozempic_order.pdf');
-    } else {
-      setSelectedInsurer('uhc');
-      setCardFileName('uhc_choice_plus_card.png');
-      setClinicalFileName('orthopedic_knee_surgery_order.pdf');
-    }
-
-    try {
-      const res = await analyzeIntake({ sample_id: sampleId });
-      setAnalysisResult(res);
-    } catch (err: any) {
-      setAnalysisError(err?.message || 'Failed to analyze intake sample.');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
 
   // Run Real AI Analysis
   const handleRunAnalysis = async () => {
@@ -224,33 +194,6 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
             </button>
           </div>
 
-          {/* Quick Presets Bar without emojis */}
-          <div className="px-6 py-2.5 bg-[#F4F7F5] border-b border-[#E8EFEA] flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-bold text-[#698579] uppercase tracking-wider text-[11px] mr-1">
-              Test Scenarios:
-            </span>
-            <button
-              type="button"
-              onClick={() => handleSelectPreset('aetna_keytruda')}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all shadow-2xs"
-            >
-              <strong className="text-purple-700">Aetna</strong> · Keytruda (Prior Auth Missing)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectPreset('bcbs_ozempic')}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all shadow-2xs"
-            >
-              <strong className="text-blue-700">BCBS</strong> · Ozempic (Formulary Excluded)
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectPreset('uhc_ortho')}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all shadow-2xs"
-            >
-              <strong className="text-emerald-700">UHC</strong> · Knee Surgery (Compliant & Approved)
-            </button>
-          </div>
 
           {/* Main Body */}
           <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm">
