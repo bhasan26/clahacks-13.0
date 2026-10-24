@@ -1,6 +1,7 @@
 # CoverageGuard 🛡️
 ### Autonomous Health Insurance Coverage Sentinel & Denial Prevention Platform
 
+[![Hackathon](https://img.shields.io/badge/Hackathon-CalHacks%2013.0-FF5722?style=flat-square&logo=hackerearth)](https://calhacks.io)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18.3+-61DAFB?style=flat-square&logo=react)](https://reactjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5+-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
@@ -247,11 +248,18 @@ Follow this script to demonstrate the platform to judges, clinicians, or revenue
 
 ---
 
-## 👥 Contributors & Acknowledgments
+## 👥 Contributors & Team
 
-Built for the **CLA Hacks 13.0** challenge.  
-* **Lead Engineer & Architect:** Dr. Bilal Hasan (`Claims Officer & AI Systems`)
-* **Design Inspiration:** Shakuro ACRU Web Dashboard UI/UX Design System.
+Proudly built for **CalHacks 13.0** (UC Berkeley).
+
+| Contributor | GitHub Profile | Role |
+| :--- | :--- | :--- |
+| **Bilal Hasan** | [@bhasan26](https://github.com/bhasan26) | Lead AI Engineer & Full-Stack Architect |
+| **H. Lagunes** | [@hlagunes01](https://github.com/hlagunes01) / [@hlagunes01-bot](https://github.com/hlagunes01-bot) | Product Strategy & Domain Specifications |
+
+### Special Acknowledgments
+* **Design Inspiration:** Shakuro "ACRU" Web Dashboard UI/UX Design System.
+* **Clinical Data Resources:** MTSamples & Synthetic Payer Formulary Specifications.
 
 ---
 *CoverageGuard — Protecting Healthcare Providers from Avoidable Claims Denials.*
