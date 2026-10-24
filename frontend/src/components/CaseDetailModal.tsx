@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Case, CaseCheckResult, ItemVerdict, CaseStatusType, ItemResultType } from '../types';
+import { PolicyBulletinModal } from './PolicyBulletinModal';
 
 interface CaseDetailModalProps {
   caseData: Case | null;
@@ -12,6 +13,8 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
   checkResult,
   onClose,
 }) => {
+  const [bulletinModalOpen, setBulletinModalOpen] = useState<boolean>(false);
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -179,12 +182,27 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
                 </div>
 
                 {/* Sub-breakdown: Rule and Action */}
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[11px] text-[#12544F]/70 border-t border-[#D8E5DC]/60">
-                  <span>{verdict.rule_reference}</span>
-                  <span>·</span>
-                  <span className="font-semibold text-[#092328]">
-                    Action: {verdict.what_to_do}
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-[#12544F]/70 border-t border-[#D8E5DC]/60">
+                  <div className="flex items-center gap-2">
+                    <span>{verdict.rule_reference}</span>
+                    <span>·</span>
+                    <span className="font-semibold text-[#092328]">
+                      Action: {verdict.what_to_do}
+                    </span>
+                  </div>
+
+                  {verdict.rule_id && (
+                    <button
+                      onClick={() => {
+                        setSelectedRuleId(verdict.rule_id || null);
+                        setBulletinModalOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-[#D5E2D9] text-[#2A835F] text-[11px] font-bold hover:bg-[#EBF4EE] transition-colors shadow-2xs cursor-pointer"
+                    >
+                      <span>📄 Review Policy Bulletin {verdict.rule_id}</span>
+                      <span>↗</span>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -206,6 +224,12 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
           </button>
         </div>
       </div>
+
+      <PolicyBulletinModal
+        isOpen={bulletinModalOpen}
+        onClose={() => setBulletinModalOpen(false)}
+        ruleId={selectedRuleId}
+      />
     </div>
   );
 };

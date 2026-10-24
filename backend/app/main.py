@@ -38,10 +38,16 @@ from app.domain.models import (
     InsurerConnectionInfo,
     InsurerUpdateEntry,
     ItemVerdict,
+    PolicyBulletin,
     Rule,
     utc_now,
 )
 from app.engine.checker import evaluate_case
+from app.intake.analyzer import (
+    analyze_clinical_document,
+    analyze_insurance_card,
+    get_fallback_sample,
+)
 
 app = FastAPI(
     title="CoverageGuard API",
@@ -165,11 +171,120 @@ def get_case(case_id: str):
 
 
 # ---------------------------------------------------------
-# File Upload: Patient File + Prescription
+# Official Insurer Policy Bulletins
+# ---------------------------------------------------------
+@app.get("/api/bulletins/{rule_id}", response_model=PolicyBulletin)
+def get_policy_bulletin(rule_id: str):
+    """
+    Returns official insurer clinical policy bulletin, circular rationale,
+    coverage criteria, and appeal guidance so claims officers can verify citations.
+    """
+    b = store.get_bulletin(rule_id)
+    if not b:
+        raise HTTPException(status_code=404, detail=f"Policy bulletin not found for rule {rule_id}")
+    return b
+
+
+# ---------------------------------------------------------
+# Multimodal AI Intake & Live Pre-Check
+# ---------------------------------------------------------
+class AnalyzeIntakePayload(BaseModel):
+    sample_id: Optional[str] = None
+    card_image_b64: Optional[str] = None
+    card_text: Optional[str] = None
+    clinical_doc_b64: Optional[str] = None
+    clinical_text: Optional[str] = None
+
+
+@app.post("/api/intake/analyze")
+def analyze_intake_files(payload: AnalyzeIntakePayload):
+    """
+    Multimodal AI Intake:
+    1. Uses Gemini 3 Flash to read insurance card (payer, member ID, plan).
+    2. Reads clinical documents (specialty, diagnoses, drugs, procedures, attached docs).
+    3. Runs the deterministic coverage engine against active payer rules.
+    4. Attaches official policy bulletin citations and officer action instructions.
+    """
+    if payload.sample_id:
+        preset = get_fallback_sample(payload.sample_id)
+        card_data = preset["card"]
+        clinical_data = preset["clinical"]
+    else:
+        card_data = analyze_insurance_card(
+            image_b64=payload.card_image_b64,
+            text_content=payload.card_text,
+        )
+        clinical_data = analyze_clinical_document(
+            doc_b64=payload.clinical_doc_b64,
+            text_content=payload.clinical_text,
+        )
+
+    # Build provisional case for instant rule evaluation
+    sdate = date(2026, 11, 10)
+    if clinical_data.get("service_date"):
+        try:
+            sdate = datetime.strptime(clinical_data["service_date"], "%Y-%m-%d").date()
+        except Exception:
+            pass
+
+    raw_items = clinical_data.get("items", [])
+    case_items = [
+        CaseItem(
+            type=item.get("type", "drug"),
+            code=item.get("code", "DRUG-A"),
+            name=item.get("name", "Prescribed Item"),
+            quantity=item.get("quantity", 1),
+        )
+        for item in raw_items
+    ]
+    if not case_items:
+        case_items = [CaseItem(type="drug", code="DRUG-A", name="Standard Care Item", quantity=1)]
+
+    dx_code = clinical_data.get("diagnosis_code") or "DX-100"
+    dx_desc = clinical_data.get("diagnosis_desc") or "Clinical Order Intake"
+
+    provisional_case = Case(
+        case_id="PROVISIONAL",
+        insurer_id=card_data.get("insurer_id") or "demo-insurer",
+        insurer_name=card_data.get("insurer_name") or "Demo Insurance Co.",
+        plan_id=card_data.get("plan_id") or "PLAN-GOLD",
+        member_ref=card_data.get("member_ref") or f"M-{uuid.uuid4().hex[:6]}",
+        group_number=card_data.get("group_number"),
+        specialty=clinical_data.get("specialty") or "Cardiology",
+        service_date=sdate,
+        visit_type="outpatient",
+        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)],
+        items=case_items,
+        documents=clinical_data.get("documents", []),
+        prior_approval_ref=clinical_data.get("prior_approval_ref"),
+        status="Approved",
+    )
+
+    eval_result = evaluate_case(provisional_case, list(store.rules.values()))
+
+    # Find matching policy bulletin if an issue is flagged
+    matching_bulletin = None
+    for verdict in eval_result.results:
+        if verdict.rule_id:
+            matching_bulletin = store.get_bulletin(verdict.rule_id)
+            if matching_bulletin:
+                break
+
+    return {
+        "success": True,
+        "card": card_data,
+        "clinical": clinical_data,
+        "check_result": eval_result,
+        "bulletin": matching_bulletin,
+    }
+
+
+# ---------------------------------------------------------
+# File Upload: Save Case to Caseload
 # ---------------------------------------------------------
 class UploadCasePayload(BaseModel):
     specialty: str = "Cardiology"
-    patient_text: str
+    patient_text: Optional[str] = ""
     prescription_text: Optional[str] = None
     insurer_id: Optional[str] = "demo-insurer"
     insurer_name: Optional[str] = "Demo Insurance Co."
@@ -181,6 +296,9 @@ class UploadCasePayload(BaseModel):
     item_code: Optional[str] = None
     service_date: Optional[str] = None
     prior_approval_ref: Optional[str] = None
+    diagnosis_code: Optional[str] = None
+    diagnosis_desc: Optional[str] = None
+    documents: Optional[List[str]] = None
 
 
 @app.post("/api/cases/upload")
@@ -190,7 +308,7 @@ def upload_patient_file(payload: UploadCasePayload):
 
     # Use specified item or extract from text
     itype = payload.item_type or "drug"
-    icode = payload.item_code or ("DRUG-A" if "drug a" in payload.patient_text.lower() else "STD-CARE")
+    icode = payload.item_code or ("DRUG-A" if "drug a" in (payload.patient_text or "").lower() else "STD-CARE")
     iname = payload.item_name or ("Drug A" if icode == "DRUG-A" else "Standard Care Protocol")
 
     sdate = date(2026, 11, 15)
@@ -205,6 +323,10 @@ def upload_patient_file(payload: UploadCasePayload):
     ins_name = payload.insurer_name or "Demo Insurance Co."
     p_id = payload.plan_id or "PLAN-GOLD"
 
+    dx_code = payload.diagnosis_code or "DX-100"
+    dx_desc = payload.diagnosis_desc or f"{payload.specialty} Intake"
+    docs = payload.documents or []
+
     new_case = Case(
         case_id=new_id,
         insurer_id=ins_id,
@@ -215,9 +337,9 @@ def upload_patient_file(payload: UploadCasePayload):
         specialty=payload.specialty,
         service_date=sdate,
         visit_type="outpatient",
-        diagnoses=[Diagnosis(code="DX-100", description=f"{payload.specialty} Intake")],
+        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)],
         items=[CaseItem(type=itype, code=icode, name=iname, quantity=1)],
-        documents=[],
+        documents=docs,
         prior_approval_ref=payload.prior_approval_ref,
         status="Approved",
     )

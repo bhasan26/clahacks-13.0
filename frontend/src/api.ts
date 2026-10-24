@@ -10,6 +10,8 @@ import {
   Rule,
   AuditEntry,
   CaseCheckResult,
+  IntakeAnalysisResult,
+  PolicyBulletin,
 } from './types';
 
 const API_BASE = '/api';
@@ -40,9 +42,32 @@ export async function fetchCaseDetail(caseId: string): Promise<CaseDetailRespons
   return res.json();
 }
 
+export async function analyzeIntake(data: {
+  sample_id?: string;
+  card_image_b64?: string;
+  card_text?: string;
+  clinical_doc_b64?: string;
+  clinical_text?: string;
+}): Promise<IntakeAnalysisResult> {
+  const res = await fetch(`${API_BASE}/intake/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error('Failed to analyze intake files');
+  return res.json();
+}
+
+export async function fetchPolicyBulletin(ruleId: string): Promise<PolicyBulletin> {
+  const cleanId = encodeURIComponent(ruleId.trim());
+  const res = await fetch(`${API_BASE}/bulletins/${cleanId}`);
+  if (!res.ok) throw new Error(`Failed to fetch policy bulletin for ${ruleId}`);
+  return res.json();
+}
+
 export async function uploadPatientFile(data: {
   specialty: string;
-  patient_text: string;
+  patient_text?: string;
   prescription_text?: string;
   insurer_id?: string;
   insurer_name?: string;
@@ -54,6 +79,9 @@ export async function uploadPatientFile(data: {
   item_code?: string;
   service_date?: string;
   prior_approval_ref?: string;
+  diagnosis_code?: string;
+  diagnosis_desc?: string;
+  documents?: string[];
 }): Promise<any> {
   const res = await fetch(`${API_BASE}/cases/upload`, {
     method: 'POST',

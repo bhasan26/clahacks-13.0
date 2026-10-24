@@ -18,6 +18,7 @@ from app.domain.models import (
     Diagnosis,
     InsurerConnectionInfo,
     InsurerUpdateEntry,
+    PolicyBulletin,
     Rule,
     RuleCategory,
     RuleEffect,
@@ -31,6 +32,7 @@ from app.engine.checker import evaluate_case
 class DataStore:
     def __init__(self):
         self.rules: Dict[str, Rule] = {}
+        self.bulletins: Dict[str, PolicyBulletin] = {}
         self.cases: Dict[str, Case] = {}
         self.updates: List[InsurerUpdateEntry] = []
         self.audit_log: List[dict] = []
@@ -55,6 +57,7 @@ class DataStore:
     def reset_demo_state(self):
         """Reset data back to pristine baseline with 40 cases across 5 specialties."""
         self.rules.clear()
+        self.bulletins.clear()
         self.cases.clear()
         self.updates.clear()
         self.audit_log.clear()
@@ -64,7 +67,96 @@ class DataStore:
         self.run_check_count = 0
 
         # -------------------------------------------------------------
-        # 1. Baseline Insurer Rules
+        # 1. Official Insurer Bulletins & Payer Rules
+        # -------------------------------------------------------------
+        b1 = PolicyBulletin(
+            rule_id="AETNA-CPB-0645",
+            title="Aetna Clinical Policy Bulletin #0645: Pembrolizumab (Keytruda)",
+            insurer_name="Aetna Health",
+            effective_date="1 Nov 2026",
+            last_reviewed="24 Oct 2026",
+            status="Active / Revised",
+            policy_type="Specialty Pharmacy & Oncology Formulary Mandate",
+            summary="Effective November 1, 2026, Aetna Commercial and Medicare Advantage formularies require pre-service clinical review and mandatory companion biomarker documentation (e.g. PD-L1 expression, MSI-H/dMMR status, or comprehensive genetics panel) for all new treatment courses of Keytruda (Pembrolizumab, HCPCS J9271).",
+            coverage_criteria=[
+                "FDA-approved indication or NCCN Compendium Category 2A recommendation documented.",
+                "Pathology report confirming positive biomarker or genetics panel expression attached.",
+                "Prior Authorization reference number issued prior to drug administration.",
+            ],
+            denial_risk="Claims submitted without prior auth reference or without attached pathology report will be rejected under Claim Adjustment Reason Code CO-197 (Precertification/authorization absent).",
+            official_reference_url="https://www.aetna.com/cpb/medical/data/600_699/0645.html",
+        )
+        self.bulletins[b1.rule_id] = b1
+
+        b2 = PolicyBulletin(
+            rule_id="BCBS-CIRC-2026-1042",
+            title="Blue Cross Blue Shield Policy Circular 2026-1042: GLP-1 Receptor Agonists (Ozempic / Wegovy)",
+            insurer_name="Blue Cross Blue Shield",
+            effective_date="1 Nov 2026",
+            last_reviewed="22 Oct 2026",
+            status="Active / Formulary Exclusion",
+            policy_type="Formulary Tier Restriction & Diagnostic Criteria",
+            summary="Effective November 1, 2026, Semaglutide (Ozempic, HCPCS J3490) is restricted to patients with confirmed Type 2 Diabetes Mellitus (ICD-10 E11 series). Prescriptions indicated for weight management, obesity without diabetes, or cosmetic weight loss are excluded from coverage under standard commercial employer benefit plans.",
+            coverage_criteria=[
+                "Primary diagnosis must be Type 2 Diabetes Mellitus (ICD-10 E11.0 - E11.9).",
+                "Documented failure, contraindication, or intolerance to generic Metformin within past 12 months.",
+                "Chart note showing current HbA1c >= 7.0% within the past 90 days.",
+            ],
+            denial_risk="Submissions without Type 2 Diabetes diagnostic code will be denied under CO-96 (Non-covered charge).",
+            official_reference_url="https://www.bcbs.com/clinical-coverage/circulars/2026-1042.html",
+        )
+        self.bulletins[b2.rule_id] = b2
+
+        b3 = PolicyBulletin(
+            rule_id="UHC-POL-405",
+            title="UnitedHealthcare Medical Policy #2026-405: Adalimumab & Targeted Immunomodulators",
+            insurer_name="UnitedHealthcare",
+            effective_date="15 Nov 2026",
+            last_reviewed="20 Oct 2026",
+            status="Announced / Prior Authorization Mandate",
+            policy_type="Step Therapy & Specialty Biologic Mandate",
+            summary="Mandates step-therapy trial of preferred biosimilars before originator Humira approval. Requires Prior Authorization with clinical treatment timeline.",
+            coverage_criteria=[
+                "Documented trial of preferred biosimilar (Hadlima or Hyrimoz) for minimum 90 days.",
+                "Approved Prior Authorization from OptumRx/UHC specialty committee.",
+            ],
+            denial_risk="Denied under CO-197 / Step Therapy non-fulfillment.",
+            official_reference_url="https://www.uhcprovider.com/policies/2026-405.html",
+        )
+        self.bulletins[b3.rule_id] = b3
+
+        b4 = PolicyBulletin(
+            rule_id="R-1042",
+            title="Demo Insurance Co. Formulary Bulletin 2026-1042: Drug A Exclusion",
+            insurer_name="Demo Insurance Co.",
+            effective_date="1 Nov 2026",
+            last_reviewed="24 Oct 2026",
+            status="Effective 1 Nov 2026",
+            policy_type="Formulary Exclusion Update",
+            summary="Drug A is excluded from commercial coverage starting 1 Nov 2026. Review with physician before filing.",
+            coverage_criteria=["Requires formulary exception request or medical necessity appeal."],
+            denial_risk="Claim rejection CO-96 (Non-covered service).",
+            official_reference_url="https://demo-insurer.com/bulletins/R-1042",
+        )
+        self.bulletins[b4.rule_id] = b4
+
+        b5 = PolicyBulletin(
+            rule_id="R-202",
+            title="Demo Insurance Co. Policy Bulletin 2026-202: Joint Procedure Prior Approval",
+            insurer_name="Demo Insurance Co.",
+            effective_date="15 Oct 2026",
+            last_reviewed="24 Oct 2026",
+            status="Effective",
+            policy_type="Prior Authorization Mandate",
+            summary="Major joint and orthopedic procedures require prior approval code.",
+            coverage_criteria=["Prior authorization reference required from provider portal."],
+            denial_risk="Claim rejection CO-197 (Precertification absent).",
+            official_reference_url="https://demo-insurer.com/bulletins/R-202",
+        )
+        self.bulletins[b5.rule_id] = b5
+
+        # -------------------------------------------------------------
+        # Baseline Rules (Demo Insurer + Real Payer Policies)
         # -------------------------------------------------------------
         r1 = Rule(
             rule_id="R-1042",
@@ -77,6 +169,10 @@ class DataStore:
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
             source_ref="insurer-rules:formulary-v1",
+            source_title="Demo Insurance Co. Formulary Bulletin 2026-1042",
+            source_url="/api/bulletins/R-1042",
+            bulletin_summary="Drug A covered under baseline formulary v1.",
+            action_guidance=["Clean claim: ready for electronic clearinghouse submission."],
         )
         self.rules[f"{r1.rule_id}_v{r1.version}"] = r1
 
@@ -91,6 +187,10 @@ class DataStore:
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
             source_ref="insurer-rules:prior-auth-v1",
+            source_title="Demo Insurance Co. Policy Bulletin 2026-202",
+            source_url="/api/bulletins/R-202",
+            bulletin_summary="Major joint and orthopedic procedures require prior approval code.",
+            action_guidance=["Obtain prior approval reference from insurer provider portal."],
         )
         self.rules[f"{r2.rule_id}_v{r2.version}"] = r2
 
@@ -105,6 +205,10 @@ class DataStore:
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
             source_ref="insurer-rules:formulary-v1",
+            source_title="Demo Insurance Co. Formulary Maintenance Bulletin",
+            source_url="/api/bulletins/R-301",
+            bulletin_summary="Standard cardiovascular maintenance drug tier 1.",
+            action_guidance=["Clean claim: ready for submission."],
         )
         self.rules[f"{r3.rule_id}_v{r3.version}"] = r3
 
@@ -119,6 +223,10 @@ class DataStore:
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
             source_ref="insurer-rules:standard-v1",
+            source_title="Demo Insurance Co. Standard Inpatient & Outpatient Protocols",
+            source_url="/api/bulletins/R-300",
+            bulletin_summary="Standard institutional care guidelines.",
+            action_guidance=["Compliant standard care protocol."],
         )
         self.rules[f"{r4.rule_id}_v{r4.version}"] = r4
 
@@ -134,8 +242,81 @@ class DataStore:
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
             source_ref="insurer-rules:oncology-docs-v1",
+            source_title="Demo Insurance Co. Oncology Biotherapy Documentation Mandate",
+            source_url="/api/bulletins/R-405",
+            bulletin_summary="Genetics panel documentation required for Targeted Biotherapy.",
+            action_guidance=["Attach Genetics Panel Report before submission."],
         )
         self.rules[f"{r5.rule_id}_v{r5.version}"] = r5
+
+        # --- AETNA RULES ---
+        r_aetna_keytruda = Rule(
+            rule_id="AETNA-CPB-0645",
+            version=2,
+            insurer_id="aetna",
+            plan_ids=["*"],
+            category=RuleCategory.DRUG,
+            target=Target(type="drug", code="KEYTRUDA", name="Keytruda (Pembrolizumab)"),
+            effect=RuleEffect.REQUIRES_DOCUMENTS,
+            conditions={"required_documents": ["Genetics Panel Report"], "requires_prior_approval": True},
+            status=RuleStatus.EFFECTIVE,
+            effective_from=date(2026, 11, 1),
+            source_ref="aetna:cpb-0645-v2",
+            source_title="Aetna Clinical Policy Bulletin #0645: Oncology Biotherapies",
+            source_url="/api/bulletins/AETNA-CPB-0645",
+            bulletin_summary="Keytruda moved to Tier 4 Specialty. Requires Prior Authorization and companion Biomarker / Genetics Panel Report.",
+            action_guidance=[
+                "Obtain companion Biomarker / Genetics Panel Report from pathology.",
+                "Submit Prior Authorization request through Aetna Availity portal.",
+                "Attach authorization number to billing record.",
+            ],
+        )
+        self.rules[f"{r_aetna_keytruda.rule_id}_v{r_aetna_keytruda.version}"] = r_aetna_keytruda
+
+        # --- BCBS RULES ---
+        r_bcbs_ozempic = Rule(
+            rule_id="BCBS-CIRC-2026-1042",
+            version=2,
+            insurer_id="bcbs",
+            plan_ids=["*"],
+            category=RuleCategory.DRUG,
+            target=Target(type="drug", code="OZEMPIC", name="Ozempic (Semaglutide)"),
+            effect=RuleEffect.EXCLUDED,
+            status=RuleStatus.EFFECTIVE,
+            effective_from=date(2026, 11, 1),
+            source_ref="bcbs:circular-2026-1042",
+            source_title="Blue Cross Blue Shield Policy Circular 2026-1042: GLP-1 Coverage Limits",
+            source_url="/api/bulletins/BCBS-CIRC-2026-1042",
+            bulletin_summary="Excluded for weight management under standard employer plans. Covered only for Type 2 Diabetes.",
+            action_guidance=[
+                "Confirm primary ICD-10 diagnosis is Type 2 Diabetes (E11.x).",
+                "If indicated strictly for weight reduction, notify patient that prescription is non-covered.",
+                "Discuss formulary alternative with the physician.",
+            ],
+        )
+        self.rules[f"{r_bcbs_ozempic.rule_id}_v{r_bcbs_ozempic.version}"] = r_bcbs_ozempic
+
+        # --- UHC RULES ---
+        r_uhc_humira = Rule(
+            rule_id="UHC-POL-405",
+            version=1,
+            insurer_id="uhc",
+            plan_ids=["*"],
+            category=RuleCategory.DRUG,
+            target=Target(type="drug", code="HUMIRA", name="Humira (Adalimumab)"),
+            effect=RuleEffect.REQUIRES_PRIOR_APPROVAL,
+            status=RuleStatus.EFFECTIVE,
+            effective_from=date(2026, 1, 1),
+            source_ref="uhc:pol-405-specialty",
+            source_title="UnitedHealthcare Medical Policy #2026-405: Targeted Immunomodulators",
+            source_url="/api/bulletins/UHC-POL-405",
+            bulletin_summary="Prior authorization required with documented step-therapy trial of preferred biosimilar.",
+            action_guidance=[
+                "Document trial of preferred biosimilar (Hadlima or Hyrimoz).",
+                "Submit Prior Auth to OptumRx / UnitedHealthcare portal.",
+            ],
+        )
+        self.rules[f"{r_uhc_humira.rule_id}_v{r_uhc_humira.version}"] = r_uhc_humira
 
         # -------------------------------------------------------------
         # 2. Seed 40 Cases Across 5 Specialties
@@ -427,6 +608,16 @@ class DataStore:
             "case": case,
             "check_result": eval_result,
         }
+
+    def get_bulletin(self, rule_id: str) -> Optional[PolicyBulletin]:
+        """Returns official policy bulletin for a rule ID."""
+        clean_id = rule_id.strip()
+        if clean_id in self.bulletins:
+            return self.bulletins[clean_id]
+        for bid, b in self.bulletins.items():
+            if bid in clean_id or clean_id in bid:
+                return b
+        return None
 
 
 # Singleton store instance

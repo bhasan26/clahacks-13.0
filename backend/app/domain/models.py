@@ -59,6 +59,10 @@ class Rule(BaseModel):
     effective_from: date
     effective_to: Optional[date] = None
     source_ref: str
+    source_title: Optional[str] = None
+    source_url: Optional[str] = None
+    bulletin_summary: Optional[str] = None
+    action_guidance: Optional[List[str]] = None
     received_at: datetime = Field(default_factory=utc_now)
 
 
@@ -120,6 +124,25 @@ class ItemVerdict(BaseModel):
     rule_reference: str  # "Rule R-1042."
     what_to_do: str      # "Review with the physician before submitting."
     full_issue_text: str # Plain single sentence combining statement, rule reference, and action
+    source_title: Optional[str] = None
+    source_url: Optional[str] = None
+    why_not_approved: Optional[str] = None
+    bulletin_summary: Optional[str] = None
+    action_guidance: Optional[List[str]] = None
+
+
+class PolicyBulletin(BaseModel):
+    rule_id: str
+    title: str
+    insurer_name: str
+    effective_date: str
+    last_reviewed: str
+    status: str
+    policy_type: str
+    summary: str
+    coverage_criteria: List[str]
+    denial_risk: str
+    official_reference_url: Optional[str] = None
 
 
 class CaseCheckResult(BaseModel):

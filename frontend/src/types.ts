@@ -62,6 +62,52 @@ export interface ItemVerdict {
   what_to_do: string;
   suggested_officer_action?: string;
   full_issue_text: string;
+  source_title?: string;
+  source_url?: string;
+  why_not_approved?: string;
+  bulletin_summary?: string;
+  action_guidance?: string[];
+}
+
+export interface PolicyBulletin {
+  rule_id: string;
+  title: string;
+  insurer_name: string;
+  effective_date: string;
+  last_reviewed: string;
+  status: string;
+  policy_type: string;
+  summary: string;
+  coverage_criteria: string[];
+  denial_risk: string;
+  official_reference_url?: string;
+}
+
+export interface IntakeAnalysisResult {
+  success: boolean;
+  card: {
+    insurer_name: string;
+    insurer_id: string;
+    member_ref: string;
+    group_number?: string;
+    plan_id: string;
+    plan_name: string;
+    copay?: string;
+    confidence?: number;
+  };
+  clinical: {
+    patient_name?: string;
+    specialty: string;
+    service_date: string;
+    diagnosis_code: string;
+    diagnosis_desc: string;
+    items: Array<{ type: string; code: string; name: string; quantity?: number }>;
+    documents: string[];
+    prior_approval_ref?: string | null;
+    confidence?: number;
+  };
+  check_result: CaseCheckResult;
+  bulletin?: PolicyBulletin | null;
 }
 
 export interface Case {

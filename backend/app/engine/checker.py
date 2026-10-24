@@ -30,6 +30,53 @@ def format_date_plain(d: Optional[date]) -> str:
     return d.strftime("%-d %b %Y")
 
 
+def normalize_insurer(ins: Optional[str]) -> str:
+    s = (ins or "").lower()
+    if "aetna" in s:
+        return "aetna"
+    if "blue" in s or "bcbs" in s:
+        return "bcbs"
+    if "united" in s or "uhc" in s:
+        return "uhc"
+    if "cigna" in s:
+        return "cigna"
+    if "medicare" in s or "cms" in s:
+        return "cms"
+    return "demo-insurer"
+
+
+ALIAS_MAP = {
+    "KEYTRUDA": ["KEYTRUDA", "PEMBROLIZUMAB", "J9271"],
+    "PEMBROLIZUMAB": ["KEYTRUDA", "PEMBROLIZUMAB", "J9271"],
+    "J9271": ["KEYTRUDA", "PEMBROLIZUMAB", "J9271"],
+    "OZEMPIC": ["OZEMPIC", "SEMAGLUTIDE", "J3490", "WEGOVY"],
+    "SEMAGLUTIDE": ["OZEMPIC", "SEMAGLUTIDE", "J3490", "WEGOVY"],
+    "HUMIRA": ["HUMIRA", "ADALIMUMAB", "J0135"],
+    "ADALIMUMAB": ["HUMIRA", "ADALIMUMAB", "J0135"],
+    "PROC-1": ["PROC-1", "KNEE ARTHROPLASTY", "TOTAL KNEE", "27447", "MAJOR JOINT PROCEDURE"],
+    "DRUG-A": ["DRUG-A", "DRUG A"],
+    "DRUG-B": ["DRUG-B", "DRUG B", "LISINOPRIL", "ATORVASTATIN"],
+}
+
+
+def codes_match(target_code: str, item_code: str, item_name: Optional[str] = None) -> bool:
+    t_up = target_code.upper()
+    i_up = item_code.upper()
+    if t_up == i_up:
+        return True
+    
+    aliases = ALIAS_MAP.get(t_up, [t_up])
+    if i_up in aliases:
+        return True
+    
+    if item_name:
+        name_up = item_name.upper()
+        if any(alias in name_up for alias in aliases):
+            return True
+            
+    return False
+
+
 def is_rule_applicable(
     rule: Rule,
     insurer_id: str,
@@ -38,16 +85,15 @@ def is_rule_applicable(
     governing_date: date,
 ) -> bool:
     """Check if a rule version applies to an item on governing_date."""
-    if rule.insurer_id != insurer_id:
-        return False
+    # Match insurer
+    if rule.insurer_id != "*" and rule.insurer_id != insurer_id:
+        if normalize_insurer(rule.insurer_id) != normalize_insurer(insurer_id):
+            return False
 
     if "*" not in rule.plan_ids and plan_id not in rule.plan_ids:
         return False
 
-    if (
-        rule.target.type.lower() != item.type.lower()
-        or rule.target.code.upper() != item.code.upper()
-    ):
+    if not codes_match(rule.target.code, item.code, item.name):
         return False
 
     if rule.status in [RuleStatus.CANCELLED, RuleStatus.SUPERSEDED]:
@@ -108,9 +154,9 @@ def check_item(
         upcoming = [
             r
             for r in rules
-            if r.insurer_id == case.insurer_id
+            if (r.insurer_id == "*" or normalize_insurer(r.insurer_id) == normalize_insurer(case.insurer_id))
             and ("*" in r.plan_ids or case.plan_id in r.plan_ids)
-            and r.target.code.upper() == item.code.upper()
+            and codes_match(r.target.code, item.code, item.name)
             and r.status in [RuleStatus.ANNOUNCED, RuleStatus.EFFECTIVE]
             and r.effective_from > governing_date
         ]
@@ -131,6 +177,10 @@ def check_item(
                 rule_reference=rule_ref,
                 what_to_do=action,
                 full_issue_text=f"{sentence} {rule_ref} {action}",
+                source_title=latest_upcoming.source_title or f"Policy Bulletin {latest_upcoming.rule_id}",
+                source_url=latest_upcoming.source_url or f"/api/bulletins/{latest_upcoming.rule_id}",
+                bulletin_summary=latest_upcoming.bulletin_summary,
+                action_guidance=latest_upcoming.action_guidance,
             )
 
         sentence = f"No matching rule found for {item_display}."
@@ -146,15 +196,22 @@ def check_item(
             rule_reference=rule_ref,
             what_to_do=action,
             full_issue_text=f"{sentence} {rule_ref} {action}",
+            why_not_approved="No established insurer policy found for this billing code in the current database.",
+            action_guidance=["Verify patient eligibility and code in payer portal before filing."],
         )
 
     eff_str = format_date_plain(best_rule.effective_from)
     rule_ref = f"Rule {best_rule.rule_id}."
+    src_title = best_rule.source_title or f"Insurer Policy Bulletin {best_rule.rule_id}"
+    src_url = best_rule.source_url or f"/api/bulletins/{best_rule.rule_id}"
+    b_summary = best_rule.bulletin_summary
+    guidance = best_rule.action_guidance or [best_rule.source_ref]
 
     # 2. Excluded
     if best_rule.effect == RuleEffect.EXCLUDED:
         sentence = f"{item_display} is not covered from {eff_str}."
         action = "Review with the physician before submitting."
+        why = f"{item_display} is non-covered or excluded under policy {best_rule.rule_id} effective {eff_str}."
         return ItemVerdict(
             item=item,
             result="Not covered",
@@ -165,6 +222,11 @@ def check_item(
             rule_reference=rule_ref,
             what_to_do=action,
             full_issue_text=f"{sentence} {rule_ref} {action}",
+            source_title=src_title,
+            source_url=src_url,
+            why_not_approved=why,
+            bulletin_summary=b_summary,
+            action_guidance=guidance or ["Discuss formulary alternatives with the ordering physician before submission."],
         )
 
     # 3. Prior Approval Needed
@@ -175,6 +237,7 @@ def check_item(
         if not case.prior_approval_ref:
             sentence = f"{item_display} requires prior approval under current rules."
             action = "Obtain prior approval reference from insurer before submitting."
+            why = f"{item_display} requires pre-service clinical authorization from {case.insurer_name or 'the insurer'} under policy {best_rule.rule_id}."
             return ItemVerdict(
                 item=item,
                 result="Prior approval needed",
@@ -185,6 +248,11 @@ def check_item(
                 rule_reference=rule_ref,
                 what_to_do=action,
                 full_issue_text=f"{sentence} {rule_ref} {action}",
+                source_title=src_title,
+                source_url=src_url,
+                why_not_approved=why,
+                bulletin_summary=b_summary,
+                action_guidance=guidance or ["Submit prior authorization request via payer provider portal before service is rendered."],
             )
 
     # 4. Required Documents Missing
@@ -200,6 +268,7 @@ def check_item(
             docs_str = ", ".join(missing_docs)
             sentence = f"Required document ({docs_str}) is missing for {item_display}."
             action = f"Attach {docs_str} before submitting."
+            why = f"Policy {best_rule.rule_id} mandates attachment of clinical documentation ({docs_str}) to justify medical necessity."
             return ItemVerdict(
                 item=item,
                 result="Document missing",
@@ -210,6 +279,11 @@ def check_item(
                 rule_reference=rule_ref,
                 what_to_do=action,
                 full_issue_text=f"{sentence} {rule_ref} {action}",
+                source_title=src_title,
+                source_url=src_url,
+                why_not_approved=why,
+                bulletin_summary=b_summary,
+                action_guidance=guidance or [f"Obtain {docs_str} from medical records department and attach to claim file."],
             )
 
     # 5. Covered
@@ -225,6 +299,10 @@ def check_item(
         rule_reference=rule_ref,
         what_to_do=action,
         full_issue_text=f"{sentence} {rule_ref} {action}",
+        source_title=src_title,
+        source_url=src_url,
+        bulletin_summary=b_summary,
+        action_guidance=guidance or ["Clean claim: ready for electronic clearinghouse submission."],
     )
 
 

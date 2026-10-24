@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { uploadPatientFile } from '../api';
-import { Case } from '../types';
+import { analyzeIntake, uploadPatientFile } from '../api';
+import { Case, IntakeAnalysisResult, PolicyBulletin } from '../types';
+import { PolicyBulletinModal } from './PolicyBulletinModal';
 
 interface UploadPatientFileModalProps {
   isOpen: boolean;
@@ -8,517 +9,552 @@ interface UploadPatientFileModalProps {
   onCaseCreated: (newCase: Case) => void;
 }
 
-const INSURER_OPTIONS = [
-  { id: 'demo-insurer', name: 'Demo Insurance Co. (Connected Live)' },
-  { id: 'bcbs', name: 'Blue Cross Blue Shield' },
-  { id: 'uhc', name: 'UnitedHealthcare' },
-  { id: 'aetna', name: 'Aetna Health' },
-  { id: 'cigna', name: 'Cigna Healthcare' },
-  { id: 'kaiser', name: 'Kaiser Permanente' },
-  { id: 'cms', name: 'Medicare / CMS' },
-];
-
-const PLAN_OPTIONS = [
-  { id: 'PLAN-GOLD', name: 'PLAN-GOLD (Commercial Comprehensive)' },
-  { id: 'PLAN-SILVER', name: 'PLAN-SILVER (Standard PPO)' },
-  { id: 'PLAN-BRONZE', name: 'PLAN-BRONZE (High Deductible)' },
-  { id: 'MED-ADVANTAGE', name: 'MED-ADVANTAGE (Medicare Advantage)' },
-];
-
 export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
   isOpen,
   onClose,
   onCaseCreated,
 }) => {
-  // Insurance input mode: 'manual' | 'card'
-  const [insuranceMode, setInsuranceMode] = useState<'manual' | 'card'>('manual');
-  const [insurerId, setInsurerId] = useState<string>('demo-insurer');
-  const [insurerName, setInsurerName] = useState<string>('Demo Insurance Co.');
-  const [planId, setPlanId] = useState<string>('PLAN-GOLD');
-  const [memberRef, setMemberRef] = useState<string>('M-88219');
-  const [groupNumber, setGroupNumber] = useState<string>('GRP-40291');
-
-  // Insurance Card upload state
+  // Uploaded files / text
   const [cardFileName, setCardFileName] = useState<string | null>(null);
-  const [isScanningCard, setIsScanningCard] = useState<boolean>(false);
-  const [isCardScanned, setIsCardScanned] = useState<boolean>(false);
+  const [cardBase64, setCardBase64] = useState<string | null>(null);
+  const [cardText, setCardText] = useState<string>('');
 
-  // Clinical & item state
-  const [specialty, setSpecialty] = useState<string>('Cardiology');
-  const [patientText, setPatientText] = useState<string>('');
-  const [prescriptionText, setPrescriptionText] = useState<string>('');
-  const [itemType, setItemType] = useState<string>('drug');
-  const [itemName, setItemName] = useState<string>('Drug A');
-  const [itemCode, setItemCode] = useState<string>('DRUG-A');
-  const [priorApprovalRef, setPriorApprovalRef] = useState<string>('');
+  const [clinicalFileName, setClinicalFileName] = useState<string | null>(null);
+  const [clinicalBase64, setClinicalBase64] = useState<string | null>(null);
+  const [clinicalText, setClinicalText] = useState<string>('');
+
+  // Analysis State
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [analysisResult, setAnalysisResult] = useState<IntakeAnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  // Policy Bulletin Modal
+  const [bulletinModalOpen, setBulletinModalOpen] = useState<boolean>(false);
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
+  const [selectedBulletin, setSelectedBulletin] = useState<PolicyBulletin | null>(null);
+
+  // Submitting
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-
-  // How it works banner toggle
-  const [showHowItWorks, setShowHowItWorks] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
-  const handleApplySample = (type: 'approved' | 'needs_attention') => {
-    if (type === 'approved') {
-      setSpecialty('Cardiology');
-      setItemType('drug');
-      setItemName('Drug B (Cardiovascular)');
-      setItemCode('DRUG-B');
-      setPatientText('Patient M-904 present for routine cardiovascular follow-up. Vital signs stable.');
-      setPrescriptionText('Prescribed Drug B (Cardiovascular) 30-day maintenance supply.');
-      setPriorApprovalRef('');
-      setMemberRef('M-904');
-      setInsurerId('demo-insurer');
-      setInsurerName('Demo Insurance Co.');
-      setPlanId('PLAN-GOLD');
-    } else {
-      setSpecialty('Orthopedics');
-      setItemType('procedure');
-      setItemName('Major Joint Procedure');
-      setItemCode('PROC-1');
-      setPatientText('Patient M-905 severe right hip osteoarthritis. Scheduled for joint intervention.');
-      setPrescriptionText('Major Joint Procedure PROC-1 indicated. Prior authorization pending.');
-      setPriorApprovalRef('');
-      setMemberRef('M-905');
-      setInsurerId('demo-insurer');
-      setInsurerName('Demo Insurance Co.');
-      setPlanId('PLAN-GOLD');
-    }
+  // Convert File to Base64
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (error) => reject(error);
+      reader.readAsDataURL(file);
+    });
   };
 
-  const handleSimulateCardScan = (customName?: string) => {
-    setIsScanningCard(true);
-    setTimeout(() => {
-      setIsScanningCard(false);
-      setIsCardScanned(true);
-      setCardFileName(customName || 'insurance_card_front.png');
-      setInsurerId('demo-insurer');
-      setInsurerName('Demo Insurance Co.');
-      setPlanId('PLAN-GOLD');
-      setMemberRef('M-88219');
-      setGroupNumber('GRP-40291');
-    }, 600);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCardFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      handleSimulateCardScan(file.name);
+      setCardFileName(file.name);
+      try {
+        const b64 = await fileToBase64(file);
+        setCardBase64(b64);
+      } catch (err) {
+        console.error('Error reading card file:', err);
+      }
     }
   };
 
-  const handleResetCard = () => {
-    setIsCardScanned(false);
-    setCardFileName(null);
+  const handleClinicalFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setClinicalFileName(file.name);
+      try {
+        const b64 = await fileToBase64(file);
+        setClinicalBase64(b64);
+      } catch (err) {
+        console.error('Error reading clinical file:', err);
+      }
+    }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!patientText.trim()) return;
+  // Quick 1-Click Real Presets
+  const handleSelectPreset = async (sampleId: 'aetna_keytruda' | 'bcbs_ozempic' | 'uhc_ortho') => {
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    setAnalysisResult(null);
 
-    setIsSubmitting(true);
+    if (sampleId === 'aetna_keytruda') {
+      setCardFileName('aetna_open_choice_card.png');
+      setClinicalFileName('dr_evans_oncology_rx_keytruda.pdf');
+    } else if (sampleId === 'bcbs_ozempic') {
+      setCardFileName('bcbs_fep_card.png');
+      setClinicalFileName('endocrinology_ozempic_order.pdf');
+    } else {
+      setCardFileName('uhc_choice_plus_card.png');
+      setClinicalFileName('orthopedic_knee_surgery_order.pdf');
+    }
+
     try {
-      const res = await uploadPatientFile({
-        specialty,
-        patient_text: patientText,
-        prescription_text: prescriptionText,
-        insurer_id: insurerId,
-        insurer_name: insurerName,
-        plan_id: planId,
-        member_ref: memberRef.trim() || undefined,
-        group_number: groupNumber.trim() || undefined,
-        item_name: itemName,
-        item_type: itemType,
-        item_code: itemCode,
-        prior_approval_ref: priorApprovalRef.trim() || undefined,
+      const res = await analyzeIntake({ sample_id: sampleId });
+      setAnalysisResult(res);
+    } catch (err: any) {
+      setAnalysisError(err?.message || 'Failed to analyze intake sample.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Run Real AI Analysis
+  const handleRunAnalysis = async () => {
+    if (!cardBase64 && !cardText.trim() && !clinicalBase64 && !clinicalText.trim()) {
+      alert('Please upload an insurance card or clinical note, or select one of the 1-click presets.');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    setAnalysisResult(null);
+
+    try {
+      const res = await analyzeIntake({
+        card_image_b64: cardBase64 || undefined,
+        card_text: cardText || undefined,
+        clinical_doc_b64: clinicalBase64 || undefined,
+        clinical_text: clinicalText || undefined,
       });
+      setAnalysisResult(res);
+    } catch (err: any) {
+      setAnalysisError(err?.message || 'AI extraction failed. Please try again or test a sample preset.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // File Case to Caseload
+  const handleFileCase = async () => {
+    if (!analysisResult) return;
+    setIsSubmitting(true);
+
+    try {
+      const card = analysisResult.card;
+      const clinical = analysisResult.clinical;
+      const firstItem = clinical.items[0] || { type: 'drug', code: 'DRUG-A', name: 'Prescribed Care' };
+
+      const res = await uploadPatientFile({
+        specialty: clinical.specialty,
+        patient_text: clinical.patient_name ? `Patient ${clinical.patient_name}` : 'Intake patient',
+        prescription_text: firstItem.name,
+        insurer_id: card.insurer_id,
+        insurer_name: card.insurer_name,
+        plan_id: card.plan_id,
+        member_ref: card.member_ref,
+        group_number: card.group_number,
+        item_name: firstItem.name,
+        item_type: firstItem.type,
+        item_code: firstItem.code,
+        service_date: clinical.service_date,
+        prior_approval_ref: clinical.prior_approval_ref || undefined,
+        diagnosis_code: clinical.diagnosis_code,
+        diagnosis_desc: clinical.diagnosis_desc,
+        documents: clinical.documents,
+      });
+
       onCaseCreated(res.case);
       onClose();
-    } catch (err) {
-      alert('Failed to upload patient file. Please try again.');
+    } catch (err: any) {
+      alert('Failed to file case to caseload: ' + (err?.message || 'Unknown error'));
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const openBulletinReview = (ruleId?: string, bulletin?: PolicyBulletin | null) => {
+    if (!ruleId) return;
+    setSelectedRuleId(ruleId);
+    setSelectedBulletin(bulletin || null);
+    setBulletinModalOpen(true);
+  };
+
   return (
-    <div
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#092328]/40 backdrop-blur-xs animate-in fade-in duration-150"
-    >
-      <div className="bg-white border border-[#D8E5DC] rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl space-y-5">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#EAEFEA] pb-3">
-          <div>
-            <h2 className="text-lg font-black text-[#092328] tracking-tight">
-              Upload Patient File
-            </h2>
-            <p className="text-xs text-[#12544F]/70">
-              Upload patient clinical record, prescription, and insurance details for automated coverage check.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-[#12544F]/60 hover:text-[#092328] text-sm font-bold cursor-pointer"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* Top Action Bar: Prefill samples + "How it works" toggle */}
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center space-x-2">
-            <span className="text-[#12544F]/70 font-semibold">Prefill sample:</span>
+    <>
+      <div
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#092328]/50 backdrop-blur-xs animate-in fade-in duration-150"
+      >
+        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-[#D5E2D9]">
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-[#E8EFEA] flex items-center justify-between bg-[#F8FAF9]">
+            <div className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-xl bg-[#EBF4EE] text-[#2A835F] flex items-center justify-center text-lg font-bold border border-[#D5E2D9]">
+                ⚡
+              </span>
+              <div>
+                <h2 className="text-base font-bold text-[#092328]">
+                  File Patient Case & Real-Time Coverage Audit
+                </h2>
+                <p className="text-xs text-[#698579]">
+                  Upload insurance card + clinical order. Our AI Agent extracts billing entities and verifies active rules.
+                </p>
+              </div>
+            </div>
             <button
-              type="button"
-              onClick={() => handleApplySample('approved')}
-              className="px-2.5 py-1 bg-[#F0F5F2] hover:bg-[#EAEFEA] text-[#092328] font-bold rounded-lg cursor-pointer transition-colors"
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg text-[#698579] hover:text-[#092328] hover:bg-[#E8EFEA] flex items-center justify-center transition-colors text-lg"
             >
-              Sample: Covered Care
-            </button>
-            <button
-              type="button"
-              onClick={() => handleApplySample('needs_attention')}
-              className="px-2.5 py-1 bg-[#F0F5F2] hover:bg-[#EAEFEA] text-[#D97706] font-bold rounded-lg cursor-pointer transition-colors"
-            >
-              Sample: Prior Auth Gap
+              ✕
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowHowItWorks(!showHowItWorks)}
-            className="text-[11px] font-bold text-[#12544F] hover:underline flex items-center space-x-1 cursor-pointer"
-          >
-            <span>{showHowItWorks ? '▾ Hide workflow' : '▸ How it works'}</span>
-          </button>
-        </div>
-
-        {/* Collapsible Explainer: "How it works" */}
-        {showHowItWorks && (
-          <div className="p-3.5 rounded-2xl bg-[#F0F5F2] border border-[#D8E5DC] text-xs text-[#092328] space-y-2 animate-in fade-in duration-150">
-            <div className="font-bold text-[#12544F] flex items-center space-x-1.5">
-              <span>Automated Verification Workflow</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-[11px] leading-snug">
-              <div className="p-2 bg-white rounded-xl border border-[#D8E5DC]/80">
-                <span className="font-bold text-[#092328] block mb-0.5">1. Intake</span>
-                Ingests clinical notes, orders, and insurance card / policy details.
-              </div>
-              <div className="p-2 bg-white rounded-xl border border-[#D8E5DC]/80">
-                <span className="font-bold text-[#092328] block mb-0.5">2. Payer Sync</span>
-                Matches against the insurer’s live published rules via read-only connection.
-              </div>
-              <div className="p-2 bg-white rounded-xl border border-[#D8E5DC]/80">
-                <span className="font-bold text-[#092328] block mb-0.5">3. Rule Check</span>
-                Pure Boolean logic verifies coverage, prior approval, and required docs.
-              </div>
-              <div className="p-2 bg-white rounded-xl border border-[#D8E5DC]/80">
-                <span className="font-bold text-[#092328] block mb-0.5">4. Verdict</span>
-                Reports Approved, Needs attention, or Missing info with exact officer actions.
-              </div>
-            </div>
+          {/* Quick Presets Bar */}
+          <div className="px-6 py-2.5 bg-[#F4F7F5] border-b border-[#E8EFEA] flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-bold text-[#698579] uppercase tracking-wider text-[11px] mr-1">
+              1-Click Verified Tests:
+            </span>
+            <button
+              type="button"
+              onClick={() => handleSelectPreset('aetna_keytruda')}
+              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all flex items-center gap-1.5 shadow-2xs"
+            >
+              <span className="text-purple-600 font-bold">🧬 Aetna</span>
+              <span>· Keytruda (Prior Auth Missing)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectPreset('bcbs_ozempic')}
+              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all flex items-center gap-1.5 shadow-2xs"
+            >
+              <span className="text-blue-600 font-bold">💊 BCBS</span>
+              <span>· Ozempic (Formulary Excluded)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectPreset('uhc_ortho')}
+              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all flex items-center gap-1.5 shadow-2xs"
+            >
+              <span className="text-emerald-600 font-bold">🏥 UHC</span>
+              <span>· Knee Surgery (Compliant & Approved)</span>
+            </button>
           </div>
-        )}
 
-        {/* Main Form */}
-        <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-          {/* SECTION 1: Insurance Details (Manual vs Card Upload) */}
-          <div className="p-3.5 rounded-2xl border border-[#D8E5DC] bg-[#FBFDFB] space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="font-black text-[#092328] tracking-tight text-xs uppercase">
-                Patient Insurance Details
-              </label>
-
-              {/* Mode Switcher Tabs */}
-              <div className="flex items-center bg-[#F0F5F2] p-0.5 rounded-xl border border-[#D8E5DC]">
-                <button
-                  type="button"
-                  onClick={() => setInsuranceMode('manual')}
-                  className={`px-3 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer ${
-                    insuranceMode === 'manual'
-                      ? 'bg-white text-[#092328] shadow-xs'
-                      : 'text-[#12544F]/70 hover:text-[#092328]'
-                  }`}
-                >
-                  Enter Manually
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInsuranceMode('card')}
-                  className={`px-3 py-1 rounded-lg font-bold text-xs transition-all cursor-pointer ${
-                    insuranceMode === 'card'
-                      ? 'bg-white text-[#092328] shadow-xs'
-                      : 'text-[#12544F]/70 hover:text-[#092328]'
-                  }`}
-                >
-                  Upload Card
-                </button>
-              </div>
-            </div>
-
-            {/* TAB 1: Enter Details Manually */}
-            {insuranceMode === 'manual' && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div className="space-y-1">
-                  <label className="font-bold text-[#092328]">Insurer / Issuer</label>
-                  <select
-                    value={insurerId}
-                    onChange={(e) => {
-                      setInsurerId(e.target.value);
-                      const opt = INSURER_OPTIONS.find((o) => o.id === e.target.value);
-                      if (opt) setInsurerName(opt.name.replace(' (Connected Live)', ''));
-                    }}
-                    className="w-full px-3 py-2 bg-white border border-[#D8E5DC] rounded-xl text-[#092328] font-semibold focus:outline-none focus:border-[#2A835F]"
-                  >
-                    {INSURER_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
+          {/* Main Body */}
+          <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm">
+            {/* Upload Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Box 1: Insurance Card */}
+              <div className="p-4 rounded-xl border border-[#D5E2D9] bg-[#FAFBFB] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">💳</span>
+                    <h3 className="font-bold text-xs uppercase tracking-wider text-[#092328]">
+                      1. Insurance Card (Photo / PDF)
+                    </h3>
+                  </div>
+                  {cardFileName && (
+                    <span className="text-[11px] font-bold text-[#2A835F] bg-[#EBF4EE] px-2 py-0.5 rounded">
+                      File Attached
+                    </span>
+                  )}
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-[#092328]">Insurance Plan</label>
-                  <select
-                    value={planId}
-                    onChange={(e) => setPlanId(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-[#D8E5DC] rounded-xl text-[#092328] font-semibold focus:outline-none focus:border-[#2A835F]"
-                  >
-                    {PLAN_OPTIONS.map((opt) => (
-                      <option key={opt.id} value={opt.id}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-[#092328]">Member / Policy ID</label>
+                <label className="block p-4 border-2 border-dashed border-[#C5D5CB] rounded-xl text-center hover:border-[#2A835F] hover:bg-white transition-colors cursor-pointer group">
                   <input
-                    type="text"
-                    value={memberRef}
-                    onChange={(e) => setMemberRef(e.target.value)}
-                    placeholder="e.g. M-88219"
-                    className="w-full px-3 py-2 bg-white border border-[#D8E5DC] rounded-xl font-mono text-[#092328] focus:outline-none focus:border-[#2A835F]"
-                    required
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={handleCardFileChange}
+                    className="hidden"
                   />
-                </div>
+                  <div className="space-y-1">
+                    <span className="text-2xl block group-hover:scale-110 transition-transform">📷</span>
+                    <p className="text-xs font-semibold text-[#092328]">
+                      {cardFileName || 'Drop insurance card photo or click to browse'}
+                    </p>
+                    <p className="text-[11px] text-[#698579]">Reads Insurer, Member ID, Group #, Plan Type</p>
+                  </div>
+                </label>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-[#092328]">
-                    Group Number <span className="font-normal text-[#12544F]/60">(optional)</span>
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#698579] mb-1">
+                    Or paste card details / Member ID:
                   </label>
                   <input
                     type="text"
-                    value={groupNumber}
-                    onChange={(e) => setGroupNumber(e.target.value)}
-                    placeholder="e.g. GRP-40291"
-                    className="w-full px-3 py-2 bg-white border border-[#D8E5DC] rounded-xl font-mono text-[#092328] focus:outline-none focus:border-[#2A835F]"
+                    value={cardText}
+                    onChange={(e) => setCardText(e.target.value)}
+                    placeholder="e.g. Aetna Choice POS II, Member: W92837482, Group: 881290"
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#D5E2D9] focus:outline-none focus:border-[#2A835F] bg-white text-[#092328]"
                   />
                 </div>
               </div>
-            )}
 
-            {/* TAB 2: Upload Insurance Card */}
-            {insuranceMode === 'card' && (
-              <div className="space-y-3 pt-1">
-                {!isCardScanned ? (
-                  <div className="border-2 border-dashed border-[#D8E5DC] hover:border-[#2A835F]/60 rounded-2xl p-4 text-center bg-white transition-colors">
-                    {isScanningCard ? (
-                      <div className="py-4 space-y-2">
-                        <div className="inline-block animate-spin h-6 w-6 border-2 border-[#12544F] border-t-transparent rounded-full" />
-                        <p className="text-xs font-bold text-[#092328]">
-                          Scanning insurance card OCR tokens...
-                        </p>
-                        <p className="text-[11px] text-[#12544F]/70">
-                          Extracting Issuer, Member ID, RxBIN, and Group Number
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="text-2xl text-[#12544F]/50">🪪</div>
-                        <p className="text-xs font-bold text-[#092328]">
-                          Upload Front of Insurance Card
-                        </p>
-                        <p className="text-[11px] text-[#12544F]/70">
-                          Drag and drop photo or scan (PNG, JPG, PDF)
-                        </p>
-                        <div className="flex items-center justify-center space-x-2 pt-1">
-                          <label className="px-3 py-1.5 bg-[#092328] hover:bg-[#12544F] text-white font-bold rounded-xl cursor-pointer transition-colors text-xs">
-                            Browse File
-                            <input
-                              type="file"
-                              accept="image/*,.pdf"
-                              onChange={handleFileUpload}
-                              className="hidden"
-                            />
-                          </label>
-                          <span className="text-[#12544F]/50">or</span>
-                          <button
-                            type="button"
-                            onClick={() => handleSimulateCardScan()}
-                            className="px-3 py-1.5 bg-[#F0F5F2] hover:bg-[#EAEFEA] text-[#12544F] font-bold rounded-xl cursor-pointer transition-colors text-xs border border-[#D8E5DC]"
-                          >
-                            Scan Sample Card
-                          </button>
-                        </div>
-                      </div>
-                    )}
+              {/* Box 2: Clinical File / Order */}
+              <div className="p-4 rounded-xl border border-[#D5E2D9] bg-[#FAFBFB] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">📋</span>
+                    <h3 className="font-bold text-xs uppercase tracking-wider text-[#092328]">
+                      2. Clinical Order / Prescription
+                    </h3>
                   </div>
-                ) : (
-                  /* Scanned Card Preview Pill */
-                  <div className="p-3.5 bg-gradient-to-r from-[#F0F5F2] to-[#E8F3EC] border border-[#2A835F]/30 rounded-2xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <span className="h-2 w-2 rounded-full bg-[#2A835F] animate-pulse" />
-                        <span className="text-xs font-bold text-[#2A835F]">
-                          Card Scanned & Verified via OCR
-                        </span>
-                        <span className="text-[10px] text-[#12544F]/60">
-                          ({cardFileName})
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleResetCard}
-                        className="text-[11px] font-bold text-[#DC2626] hover:underline cursor-pointer"
-                      >
-                        Remove card
-                      </button>
-                    </div>
+                  {clinicalFileName && (
+                    <span className="text-[11px] font-bold text-[#2A835F] bg-[#EBF4EE] px-2 py-0.5 rounded">
+                      File Attached
+                    </span>
+                  )}
+                </div>
 
-                    {/* Card Mockup Visual */}
-                    <div className="bg-white p-3 rounded-xl border border-[#D8E5DC] shadow-xs grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-                      <div>
-                        <span className="text-[#12544F]/60 block text-[10px]">Issuer</span>
-                        <span className="font-bold text-[#092328]">{insurerName}</span>
-                      </div>
-                      <div>
-                        <span className="text-[#12544F]/60 block text-[10px]">Plan</span>
-                        <span className="font-mono font-bold text-[#092328]">{planId}</span>
-                      </div>
-                      <div>
-                        <span className="text-[#12544F]/60 block text-[10px]">Member ID</span>
-                        <span className="font-mono font-bold text-[#092328]">{memberRef}</span>
-                      </div>
-                      <div>
-                        <span className="text-[#12544F]/60 block text-[10px]">Group #</span>
-                        <span className="font-mono font-bold text-[#092328]">{groupNumber}</span>
-                      </div>
-                    </div>
+                <label className="block p-4 border-2 border-dashed border-[#C5D5CB] rounded-xl text-center hover:border-[#2A835F] hover:bg-white transition-colors cursor-pointer group">
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf,.txt,.doc"
+                    onChange={handleClinicalFileChange}
+                    className="hidden"
+                  />
+                  <div className="space-y-1">
+                    <span className="text-2xl block group-hover:scale-110 transition-transform">📄</span>
+                    <p className="text-xs font-semibold text-[#092328]">
+                      {clinicalFileName || 'Drop clinical summary, order or Rx'}
+                    </p>
+                    <p className="text-[11px] text-[#698579]">Extracts Diagnosis, Drugs, Procedures & Docs</p>
                   </div>
-                )}
+                </label>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#698579] mb-1">
+                    Or paste clinical note / prescription text:
+                  </label>
+                  <input
+                    type="text"
+                    value={clinicalText}
+                    onChange={(e) => setClinicalText(e.target.value)}
+                    placeholder="e.g. Pembrolizumab 200mg IV for Non-Small Cell Lung Cancer Stage IV"
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#D5E2D9] focus:outline-none focus:border-[#2A835F] bg-white text-[#092328]"
+                  />
+                </div>
               </div>
-            )}
-          </div>
+            </div>
 
-          {/* SECTION 2: Clinical Details */}
-          <div className="space-y-3">
-            {/* Specialty */}
-            <div className="space-y-1">
-              <label className="font-bold text-[#092328]">Specialty</label>
-              <select
-                value={specialty}
-                onChange={(e) => setSpecialty(e.target.value)}
-                className="w-full px-3 py-2 bg-[#F0F5F2] border border-[#D8E5DC] rounded-xl text-[#092328] font-semibold focus:outline-none"
+            {/* Run Analysis Trigger Button */}
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#F0F5F2] border border-[#D5E2D9]">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#2A835F] animate-pulse" />
+                <span className="text-xs font-bold text-[#092328]">
+                  Gemini 3 Flash Vision & Rule Engine Ready
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleRunAnalysis}
+                disabled={isAnalyzing}
+                className="px-5 py-2.5 rounded-xl bg-[#2A835F] text-white text-xs font-bold hover:bg-[#1F6347] transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
               >
-                <option value="Cardiology">Cardiology</option>
-                <option value="Oncology">Oncology</option>
-                <option value="Orthopedics">Orthopedics</option>
-                <option value="Neurology">Neurology</option>
-                <option value="Gastroenterology">Gastroenterology</option>
-              </select>
+                {isAnalyzing ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Extracting & Auditing Rules...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>⚡ Run AI Coverage Check</span>
+                  </>
+                )}
+              </button>
             </div>
 
-            {/* Item Name & Code */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="font-bold text-[#092328]">Item Name</label>
-                <input
-                  type="text"
-                  value={itemName}
-                  onChange={(e) => setItemName(e.target.value)}
-                  placeholder="e.g. Drug A or Major Joint Procedure"
-                  className="w-full px-3 py-2 border border-[#D8E5DC] rounded-xl text-[#092328] focus:outline-none focus:border-[#2A835F]"
-                  required
-                />
+            {/* Error banner */}
+            {analysisError && (
+              <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-medium">
+                {analysisError}
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-[#092328]">Item Code</label>
-                <input
-                  type="text"
-                  value={itemCode}
-                  onChange={(e) => setItemCode(e.target.value)}
-                  placeholder="e.g. DRUG-A or PROC-1"
-                  className="w-full px-3 py-2 border border-[#D8E5DC] rounded-xl font-mono text-[#092328] focus:outline-none focus:border-[#2A835F]"
-                  required
-                />
+            )}
+
+            {/* Live Audit Results View */}
+            {analysisResult && (
+              <div className="space-y-4 pt-2 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between border-b border-[#E8EFEA] pb-2">
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-[#698579]">
+                    Coverage Pre-Check Audit Determination
+                  </h3>
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-bold ${
+                      analysisResult.check_result.status === 'Approved'
+                        ? 'bg-[#EBF4EE] text-[#2A835F] border border-[#2A835F]/30'
+                        : analysisResult.check_result.status === 'Needs attention'
+                        ? 'bg-[#FEF3C7] text-[#D97706] border border-[#D97706]/30'
+                        : 'bg-red-50 text-red-700 border border-red-200'
+                    }`}
+                  >
+                    ● Status: {analysisResult.check_result.status}
+                  </span>
+                </div>
+
+                {/* Split Extracted Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  {/* Extracted Card Data */}
+                  <div className="p-3.5 rounded-xl bg-white border border-[#D5E2D9] space-y-2">
+                    <span className="font-bold text-[#698579] uppercase tracking-wider text-[11px] block">
+                      Extracted Payer & Plan Details
+                    </span>
+                    <div className="grid grid-cols-2 gap-2 text-[12px]">
+                      <div>
+                        <span className="text-[#698579] block text-[11px]">Insurer</span>
+                        <span className="font-bold text-[#092328]">{analysisResult.card.insurer_name}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#698579] block text-[11px]">Member ID</span>
+                        <span className="font-mono font-bold text-[#092328]">{analysisResult.card.member_ref}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#698579] block text-[11px]">Plan Name</span>
+                        <span className="font-medium text-[#092328]">{analysisResult.card.plan_name}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#698579] block text-[11px]">Group #</span>
+                        <span className="font-mono text-[#092328]">{analysisResult.card.group_number || 'Standard'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Extracted Clinical Data */}
+                  <div className="p-3.5 rounded-xl bg-white border border-[#D5E2D9] space-y-2">
+                    <span className="font-bold text-[#698579] uppercase tracking-wider text-[11px] block">
+                      Extracted Clinical Order
+                    </span>
+                    <div className="grid grid-cols-2 gap-2 text-[12px]">
+                      <div>
+                        <span className="text-[#698579] block text-[11px]">Patient / Specialty</span>
+                        <span className="font-bold text-[#092328]">
+                          {analysisResult.clinical.patient_name || 'Patient'} ({analysisResult.clinical.specialty})
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[#698579] block text-[11px]">Service Date</span>
+                        <span className="font-bold text-[#092328]">{analysisResult.clinical.service_date}</span>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-[#698579] block text-[11px]">Primary Diagnosis</span>
+                        <span className="font-medium text-[#092328]">
+                          <span className="font-mono font-bold mr-1">{analysisResult.clinical.diagnosis_code}</span>
+                          {analysisResult.clinical.diagnosis_desc}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Item-by-item Verdict Cards */}
+                <div className="space-y-3">
+                  {analysisResult.check_result.results.map((verdict, idx) => {
+                    const isIssue = verdict.result !== 'Covered';
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-4 rounded-xl border ${
+                          verdict.result === 'Covered'
+                            ? 'bg-[#F8FAF9] border-[#D5E2D9]'
+                            : verdict.result === 'Not covered'
+                            ? 'bg-red-50/70 border-red-200'
+                            : 'bg-[#FFFDF5] border-[#FDE68A]'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-[#092328] text-sm">
+                              {verdict.item.name || verdict.item.code}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                verdict.result === 'Covered'
+                                  ? 'bg-[#EBF4EE] text-[#2A835F]'
+                                  : verdict.result === 'Not covered'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {verdict.result}
+                            </span>
+                          </div>
+
+                          {verdict.rule_id && (
+                            <button
+                              type="button"
+                              onClick={() => openBulletinReview(verdict.rule_id, analysisResult.bulletin)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-[#D5E2D9] text-[#2A835F] text-xs font-bold hover:bg-[#EBF4EE] transition-colors shadow-2xs"
+                            >
+                              <span>📄 Review Policy Bulletin {verdict.rule_id}</span>
+                              <span>↗</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Plain single sentence citation */}
+                        <p className="text-xs text-[#092328] font-medium leading-relaxed mb-2">
+                          {verdict.full_issue_text}
+                        </p>
+
+                        {/* Why not approved breakdown */}
+                        {isIssue && verdict.why_not_approved && (
+                          <div className="mt-2.5 p-3 rounded-lg bg-white/80 border border-amber-200/60 text-xs text-[#92400E] space-y-1.5">
+                            <div className="flex items-center gap-1.5 font-bold">
+                              <span>⚠️</span>
+                              <span>Why It's Not Approved Under Active Rules:</span>
+                            </div>
+                            <p>{verdict.why_not_approved}</p>
+
+                            {/* Action Guidance */}
+                            {verdict.action_guidance && verdict.action_guidance.length > 0 && (
+                              <div className="pt-2 border-t border-amber-200/50 space-y-1">
+                                <span className="text-[11px] font-bold text-[#092328] uppercase tracking-wider block">
+                                  Action Steps for Claims Officer:
+                                </span>
+                                <ul className="list-disc list-inside space-y-0.5 text-xs text-[#092328]">
+                                  {verdict.action_guidance.map((step, sIdx) => (
+                                    <li key={sIdx}>{step}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-
-            {/* Patient File Text */}
-            <div className="space-y-1">
-              <label className="font-bold text-[#092328]">Patient Clinical File</label>
-              <textarea
-                rows={3}
-                value={patientText}
-                onChange={(e) => setPatientText(e.target.value)}
-                placeholder="Paste patient clinical summary, diagnosis, or chart notes..."
-                className="w-full px-3 py-2 border border-[#D8E5DC] rounded-xl text-[#092328] focus:outline-none focus:border-[#2A835F]"
-                required
-              />
-            </div>
-
-            {/* Prescription Notes */}
-            <div className="space-y-1">
-              <label className="font-bold text-[#092328]">Prescription / Orders</label>
-              <textarea
-                rows={2}
-                value={prescriptionText}
-                onChange={(e) => setPrescriptionText(e.target.value)}
-                placeholder="Prescription dosage, procedure code, or required documentation notes..."
-                className="w-full px-3 py-2 border border-[#D8E5DC] rounded-xl text-[#092328] focus:outline-none focus:border-[#2A835F]"
-              />
-            </div>
-
-            {/* Prior Approval Reference */}
-            <div className="space-y-1">
-              <label className="font-bold text-[#092328]">
-                Prior Approval Reference <span className="font-normal text-[#12544F]/60">(optional)</span>
-              </label>
-              <input
-                type="text"
-                value={priorApprovalRef}
-                onChange={(e) => setPriorApprovalRef(e.target.value)}
-                placeholder="e.g. PA-9901 or leave blank if pending"
-                className="w-full px-3 py-2 border border-[#D8E5DC] rounded-xl font-mono text-[#092328] focus:outline-none focus:border-[#2A835F]"
-              />
-            </div>
+            )}
           </div>
 
-          {/* Action buttons */}
-          <div className="pt-2 flex justify-end space-x-2 border-t border-[#EAEFEA]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-[#12544F]/80 hover:bg-[#F0F5F2] font-semibold transition-all cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-5 py-2 rounded-xl bg-[#092328] hover:bg-[#12544F] text-white font-bold transition-all shadow-sm cursor-pointer disabled:opacity-50"
-            >
-              {isSubmitting ? 'Evaluating Coverage...' : 'Check Coverage'}
-            </button>
+          {/* Footer */}
+          <div className="px-6 py-4 border-t border-[#E8EFEA] bg-[#F8FAF9] flex items-center justify-between">
+            <span className="text-xs text-[#698579]">
+              {analysisResult ? 'Audit verified against active payer rulebook' : 'Ready to evaluate'}
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-[#698579] hover:bg-[#E8EFEA] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleFileCase}
+                disabled={!analysisResult || isSubmitting}
+                className="px-5 py-2.5 rounded-xl bg-[#092328] text-white text-xs font-bold hover:bg-[#133E46] transition-colors shadow-sm disabled:opacity-40 flex items-center gap-2"
+              >
+                {isSubmitting ? 'Saving to Caseload...' : 'File Case to Hospital Caseload →'}
+              </button>
+            </div>
           </div>
-        </form>
+        </div>
       </div>
-    </div>
+
+      {/* Official Insurer Policy Bulletin Modal */}
+      <PolicyBulletinModal
+        isOpen={bulletinModalOpen}
+        onClose={() => setBulletinModalOpen(false)}
+        ruleId={selectedRuleId}
+        initialBulletin={selectedBulletin}
+      />
+    </>
   );
 };
