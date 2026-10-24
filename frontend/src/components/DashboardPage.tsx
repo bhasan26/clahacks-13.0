@@ -144,10 +144,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               ) : (
                 <button
                   onClick={() => setIsEditingTarget(true)}
-                  className="text-xs font-bold text-[#12544F]/80 hover:text-[#092328] hover:underline cursor-pointer"
+                  className="inline-flex items-center gap-1 text-xs font-bold text-[#12544F]/80 hover:text-[#092328] hover:underline cursor-pointer"
                   title="Click to edit target percentage"
                 >
-                  Target {clean_claims.target}% ✎
+                  <span>Target {clean_claims.target}%</span>
+                  <svg className="w-3 h-3 text-[#12544F]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
                 </button>
               )}
             </div>

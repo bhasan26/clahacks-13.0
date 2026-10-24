@@ -9,11 +9,24 @@ interface UploadPatientFileModalProps {
   onCaseCreated: (newCase: Case) => void;
 }
 
+const INSURER_DROPDOWN_OPTIONS = [
+  { id: 'auto', name: 'Auto-detect from Clinical Order / Upload' },
+  { id: 'uhc', name: 'UnitedHealthcare (UHC)' },
+  { id: 'aetna', name: 'Aetna Health' },
+  { id: 'bcbs', name: 'Blue Cross Blue Shield (BCBS)' },
+  { id: 'cigna', name: 'Cigna Healthcare' },
+  { id: 'cms', name: 'Medicare / CMS' },
+  { id: 'demo-insurer', name: 'Demo Insurance Co.' },
+];
+
 export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
   isOpen,
   onClose,
   onCaseCreated,
 }) => {
+  // Payer selection (optional card, or explicit selector)
+  const [selectedInsurer, setSelectedInsurer] = useState<string>('auto');
+
   // Uploaded files / text
   const [cardFileName, setCardFileName] = useState<string | null>(null);
   const [cardBase64, setCardBase64] = useState<string | null>(null);
@@ -81,12 +94,15 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
     setAnalysisResult(null);
 
     if (sampleId === 'aetna_keytruda') {
+      setSelectedInsurer('aetna');
       setCardFileName('aetna_open_choice_card.png');
       setClinicalFileName('dr_evans_oncology_rx_keytruda.pdf');
     } else if (sampleId === 'bcbs_ozempic') {
+      setSelectedInsurer('bcbs');
       setCardFileName('bcbs_fep_card.png');
       setClinicalFileName('endocrinology_ozempic_order.pdf');
     } else {
+      setSelectedInsurer('uhc');
       setCardFileName('uhc_choice_plus_card.png');
       setClinicalFileName('orthopedic_knee_surgery_order.pdf');
     }
@@ -103,8 +119,8 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
 
   // Run Real AI Analysis
   const handleRunAnalysis = async () => {
-    if (!cardBase64 && !cardText.trim() && !clinicalBase64 && !clinicalText.trim()) {
-      alert('Please upload an insurance card or clinical note, or select one of the 1-click presets.');
+    if (!cardBase64 && !cardText.trim() && !clinicalBase64 && !clinicalText.trim() && selectedInsurer === 'auto') {
+      alert('Please upload a clinical order, enter text, or select an insurer.');
       return;
     }
 
@@ -118,10 +134,11 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
         card_text: cardText || undefined,
         clinical_doc_b64: clinicalBase64 || undefined,
         clinical_text: clinicalText || undefined,
+        selected_insurer_id: selectedInsurer !== 'auto' ? selectedInsurer : undefined,
       });
       setAnalysisResult(res);
     } catch (err: any) {
-      setAnalysisError(err?.message || 'AI extraction failed. Please try again or test a sample preset.');
+      setAnalysisError(err?.message || 'AI extraction failed. Please check files or verify connection.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -181,57 +198,57 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
         className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#092328]/50 backdrop-blur-xs animate-in fade-in duration-150"
       >
         <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-[#D5E2D9]">
-          {/* Header */}
+          {/* Header without symbols */}
           <div className="px-6 py-4 border-b border-[#E8EFEA] flex items-center justify-between bg-[#F8FAF9]">
             <div className="flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl bg-[#EBF4EE] text-[#2A835F] flex items-center justify-center text-lg font-bold border border-[#D5E2D9]">
-                ⚡
+              <span className="px-2.5 py-1 rounded-lg bg-[#EBF4EE] text-[#2A835F] text-xs font-bold border border-[#D5E2D9] tracking-wider uppercase">
+                Intake
               </span>
               <div>
                 <h2 className="text-base font-bold text-[#092328]">
                   File Patient Case & Real-Time Coverage Audit
                 </h2>
                 <p className="text-xs text-[#698579]">
-                  Upload insurance card + clinical order. Our AI Agent extracts billing entities and verifies active rules.
+                  Upload clinical order and optional insurance details. The engine verifies coverage against versioned payer rules.
                 </p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="w-8 h-8 rounded-lg text-[#698579] hover:text-[#092328] hover:bg-[#E8EFEA] flex items-center justify-center transition-colors text-lg"
+              className="w-8 h-8 rounded-lg text-[#698579] hover:text-[#092328] hover:bg-[#E8EFEA] flex items-center justify-center transition-colors cursor-pointer"
+              aria-label="Close"
             >
-              ✕
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
 
-          {/* Quick Presets Bar */}
+          {/* Quick Presets Bar without emojis */}
           <div className="px-6 py-2.5 bg-[#F4F7F5] border-b border-[#E8EFEA] flex flex-wrap items-center gap-2 text-xs">
             <span className="font-bold text-[#698579] uppercase tracking-wider text-[11px] mr-1">
-              1-Click Verified Tests:
+              Test Scenarios:
             </span>
             <button
               type="button"
               onClick={() => handleSelectPreset('aetna_keytruda')}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all flex items-center gap-1.5 shadow-2xs"
+              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all shadow-2xs"
             >
-              <span className="text-purple-600 font-bold">🧬 Aetna</span>
-              <span>· Keytruda (Prior Auth Missing)</span>
+              <strong className="text-purple-700">Aetna</strong> · Keytruda (Prior Auth Missing)
             </button>
             <button
               type="button"
               onClick={() => handleSelectPreset('bcbs_ozempic')}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all flex items-center gap-1.5 shadow-2xs"
+              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all shadow-2xs"
             >
-              <span className="text-blue-600 font-bold">💊 BCBS</span>
-              <span>· Ozempic (Formulary Excluded)</span>
+              <strong className="text-blue-700">BCBS</strong> · Ozempic (Formulary Excluded)
             </button>
             <button
               type="button"
               onClick={() => handleSelectPreset('uhc_ortho')}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all flex items-center gap-1.5 shadow-2xs"
+              className="px-3 py-1.5 rounded-lg bg-white border border-[#D5E2D9] text-[#092328] font-semibold hover:border-[#2A835F] hover:bg-[#EBF4EE] transition-all shadow-2xs"
             >
-              <span className="text-emerald-600 font-bold">🏥 UHC</span>
-              <span>· Knee Surgery (Compliant & Approved)</span>
+              <strong className="text-emerald-700">UHC</strong> · Knee Surgery (Compliant & Approved)
             </button>
           </div>
 
@@ -239,23 +256,42 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
           <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm">
             {/* Upload Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Box 1: Insurance Card */}
+              {/* Box 1: Insurance Details (Optional) */}
               <div className="p-4 rounded-xl border border-[#D5E2D9] bg-[#FAFBFB] space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">💳</span>
-                    <h3 className="font-bold text-xs uppercase tracking-wider text-[#092328]">
-                      1. Insurance Card (Photo / PDF)
-                    </h3>
-                  </div>
-                  {cardFileName && (
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-[#092328]">
+                    1. Insurance Details <span className="font-normal text-[#698579] lowercase">(optional)</span>
+                  </h3>
+                  {cardFileName ? (
                     <span className="text-[11px] font-bold text-[#2A835F] bg-[#EBF4EE] px-2 py-0.5 rounded">
                       File Attached
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-[#698579] bg-gray-100 px-2 py-0.5 rounded">
+                      Optional
                     </span>
                   )}
                 </div>
 
-                <label className="block p-4 border-2 border-dashed border-[#C5D5CB] rounded-xl text-center hover:border-[#2A835F] hover:bg-white transition-colors cursor-pointer group">
+                {/* Insurer Selector Dropdown */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#698579] mb-1">
+                    Select Insurer or Auto-Detect:
+                  </label>
+                  <select
+                    value={selectedInsurer}
+                    onChange={(e) => setSelectedInsurer(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-[#D5E2D9] bg-white text-[#092328] font-medium focus:outline-none focus:border-[#2A835F]"
+                  >
+                    {INSURER_DROPDOWN_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className="block p-3.5 border-2 border-dashed border-[#C5D5CB] rounded-xl text-center hover:border-[#2A835F] hover:bg-white transition-colors cursor-pointer group">
                   <input
                     type="file"
                     accept="image/*,application/pdf"
@@ -263,45 +299,45 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                     className="hidden"
                   />
                   <div className="space-y-1">
-                    <span className="text-2xl block group-hover:scale-110 transition-transform">📷</span>
                     <p className="text-xs font-semibold text-[#092328]">
-                      {cardFileName || 'Drop insurance card photo or click to browse'}
+                      {cardFileName || 'Upload insurance card photo or PDF (optional)'}
                     </p>
-                    <p className="text-[11px] text-[#698579]">Reads Insurer, Member ID, Group #, Plan Type</p>
+                    <p className="text-[11px] text-[#698579]">If omitted, insurer is detected from clinical order</p>
                   </div>
                 </label>
 
                 <div>
                   <label className="block text-[11px] font-semibold text-[#698579] mb-1">
-                    Or paste card details / Member ID:
+                    Or enter Member ID / Plan Name:
                   </label>
                   <input
                     type="text"
                     value={cardText}
                     onChange={(e) => setCardText(e.target.value)}
-                    placeholder="e.g. Aetna Choice POS II, Member: W92837482, Group: 881290"
+                    placeholder="e.g. UnitedHealthcare, Member ID: UHC-9928109"
                     className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#D5E2D9] focus:outline-none focus:border-[#2A835F] bg-white text-[#092328]"
                   />
                 </div>
               </div>
 
-              {/* Box 2: Clinical File / Order */}
+              {/* Box 2: Clinical File / Order (Primary) */}
               <div className="p-4 rounded-xl border border-[#D5E2D9] bg-[#FAFBFB] space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base">📋</span>
-                    <h3 className="font-bold text-xs uppercase tracking-wider text-[#092328]">
-                      2. Clinical Order / Prescription
-                    </h3>
-                  </div>
-                  {clinicalFileName && (
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-[#092328]">
+                    2. Clinical Order / Prescription <span className="text-[#2A835F]">*</span>
+                  </h3>
+                  {clinicalFileName ? (
                     <span className="text-[11px] font-bold text-[#2A835F] bg-[#EBF4EE] px-2 py-0.5 rounded">
                       File Attached
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
+                      Required
                     </span>
                   )}
                 </div>
 
-                <label className="block p-4 border-2 border-dashed border-[#C5D5CB] rounded-xl text-center hover:border-[#2A835F] hover:bg-white transition-colors cursor-pointer group">
+                <label className="block p-3.5 border-2 border-dashed border-[#C5D5CB] rounded-xl text-center hover:border-[#2A835F] hover:bg-white transition-colors cursor-pointer group">
                   <input
                     type="file"
                     accept="image/*,application/pdf,.txt,.doc"
@@ -309,11 +345,10 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                     className="hidden"
                   />
                   <div className="space-y-1">
-                    <span className="text-2xl block group-hover:scale-110 transition-transform">📄</span>
                     <p className="text-xs font-semibold text-[#092328]">
-                      {clinicalFileName || 'Drop clinical summary, order or Rx'}
+                      {clinicalFileName || 'Drop clinical order, Rx, or encounter PDF / text'}
                     </p>
-                    <p className="text-[11px] text-[#698579]">Extracts Diagnosis, Drugs, Procedures & Docs</p>
+                    <p className="text-[11px] text-[#698579]">Extracts Diagnosis, Drugs, Procedures & Prior Auth</p>
                   </div>
                 </label>
 
@@ -325,36 +360,34 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                     type="text"
                     value={clinicalText}
                     onChange={(e) => setClinicalText(e.target.value)}
-                    placeholder="e.g. Pembrolizumab 200mg IV for Non-Small Cell Lung Cancer Stage IV"
+                    placeholder="e.g. Humira 40mg IV for Rheumatoid Arthritis or Keytruda 200mg"
                     className="w-full px-3 py-1.5 text-xs rounded-lg border border-[#D5E2D9] focus:outline-none focus:border-[#2A835F] bg-white text-[#092328]"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Run Analysis Trigger Button */}
+            {/* Run Analysis Trigger Button without emoji */}
             <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#F0F5F2] border border-[#D5E2D9]">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#2A835F] animate-pulse" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#2A835F]" />
                 <span className="text-xs font-bold text-[#092328]">
-                  Gemini 3 Flash Vision & Rule Engine Ready
+                  Deterministic Rules Engine Ready
                 </span>
               </div>
               <button
                 type="button"
                 onClick={handleRunAnalysis}
                 disabled={isAnalyzing}
-                className="px-5 py-2.5 rounded-xl bg-[#2A835F] text-white text-xs font-bold hover:bg-[#1F6347] transition-all shadow-sm flex items-center gap-2 disabled:opacity-50"
+                className="px-5 py-2.5 rounded-xl bg-[#2A835F] text-white text-xs font-bold hover:bg-[#1F6347] transition-all shadow-sm flex items-center gap-2 disabled:opacity-50 cursor-pointer"
               >
                 {isAnalyzing ? (
                   <>
                     <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Extracting & Auditing Rules...</span>
+                    <span>Analyzing & Auditing Rules...</span>
                   </>
                 ) : (
-                  <>
-                    <span>⚡ Run AI Coverage Check</span>
-                  </>
+                  <span>Run AI Coverage Check</span>
                 )}
               </button>
             </div>
@@ -382,7 +415,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                         : 'bg-red-50 text-red-700 border border-red-200'
                     }`}
                   >
-                    ● Status: {analysisResult.check_result.status}
+                    Status: {analysisResult.check_result.status}
                   </span>
                 </div>
 
@@ -391,7 +424,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                   {/* Extracted Card Data */}
                   <div className="p-3.5 rounded-xl bg-white border border-[#D5E2D9] space-y-2">
                     <span className="font-bold text-[#698579] uppercase tracking-wider text-[11px] block">
-                      Extracted Payer & Plan Details
+                      Payer & Plan Details
                     </span>
                     <div className="grid grid-cols-2 gap-2 text-[12px]">
                       <div>
@@ -477,10 +510,15 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                             <button
                               type="button"
                               onClick={() => openBulletinReview(verdict.rule_id, analysisResult.bulletin)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-[#D5E2D9] text-[#2A835F] text-xs font-bold hover:bg-[#EBF4EE] transition-colors shadow-2xs"
+                              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-[#D5E2D9] text-[#2A835F] text-xs font-bold hover:bg-[#EBF4EE] transition-colors shadow-2xs cursor-pointer"
                             >
-                              <span>📄 Review Policy Bulletin {verdict.rule_id}</span>
-                              <span>↗</span>
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                              <span>Review Policy Bulletin {verdict.rule_id}</span>
+                              <svg className="w-3 h-3 text-[#2A835F]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
                             </button>
                           )}
                         </div>
@@ -490,12 +528,11 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                           {verdict.full_issue_text}
                         </p>
 
-                        {/* Why not approved breakdown */}
+                        {/* Why not approved breakdown without emojis */}
                         {isIssue && verdict.why_not_approved && (
                           <div className="mt-2.5 p-3 rounded-lg bg-white/80 border border-amber-200/60 text-xs text-[#92400E] space-y-1.5">
-                            <div className="flex items-center gap-1.5 font-bold">
-                              <span>⚠️</span>
-                              <span>Why It's Not Approved Under Active Rules:</span>
+                            <div className="font-bold text-amber-900">
+                              Reason Not Approved Under Active Rules:
                             </div>
                             <p>{verdict.why_not_approved}</p>
 
@@ -531,7 +568,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-[#698579] hover:bg-[#E8EFEA] transition-colors"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-[#698579] hover:bg-[#E8EFEA] transition-colors cursor-pointer"
               >
                 Cancel
               </button>
@@ -539,9 +576,14 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                 type="button"
                 onClick={handleFileCase}
                 disabled={!analysisResult || isSubmitting}
-                className="px-5 py-2.5 rounded-xl bg-[#092328] text-white text-xs font-bold hover:bg-[#133E46] transition-colors shadow-sm disabled:opacity-40 flex items-center gap-2"
+                className="px-5 py-2.5 rounded-xl bg-[#092328] text-white text-xs font-bold hover:bg-[#133E46] transition-colors shadow-sm disabled:opacity-40 flex items-center gap-2 cursor-pointer"
               >
-                {isSubmitting ? 'Saving to Caseload...' : 'File Case to Hospital Caseload →'}
+                <span>{isSubmitting ? 'Saving to Caseload...' : 'File Case to Hospital Caseload'}</span>
+                {!isSubmitting && (
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                  </svg>
+                )}
               </button>
             </div>
           </div>

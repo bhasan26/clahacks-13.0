@@ -48,6 +48,9 @@ export async function analyzeIntake(data: {
   card_text?: string;
   clinical_doc_b64?: string;
   clinical_text?: string;
+  selected_insurer_id?: string;
+  selected_insurer_name?: string;
+  selected_plan_id?: string;
 }): Promise<IntakeAnalysisResult> {
   const res = await fetch(`${API_BASE}/intake/analyze`, {
     method: 'POST',
