@@ -1,4 +1,4 @@
-# CoverageGuard: Engineering Progress & Rationale
+# Coverage Guard: Engineering Progress & Rationale
 
 **Document Purpose:** Complete audit of what has been implemented, how each component works, and the design rationale behind every engineering decision.
 
@@ -17,124 +17,112 @@ Every coverage verdict, temporal check, and impact alert in CoverageGuard is pro
 
 ## 🏗️ What Was Built & Why
 
-### 1. Contract-First Domain Models (`backend/app/domain/models.py`)
+### 1. Vertical Sidebar & Popover Architecture (`frontend/src/components/Sidebar.tsx`)
 - **What was built:**
-  - Pydantic v2 domain schemas: `Rule`, `Case`, `CaseItem`, `ItemVerdict`, `CaseCheckResult`, `Alert`, `InsurerChangeEvent`.
-  - Type-safe enums: `RuleEffect` (`covered`, `excluded`, `requires_prior_approval`, `requires_documents`), `RuleStatus` (`announced`, `effective`, `delayed`, `cancelled`, `superseded`), `VerdictType`, and `SeverityType`.
+  - Left navigation sidebar across every page:
+    - Top: `“Coverage Guard”` brand mark and `“Claims Sentinel”` identifier.
+    - Vertical navigation: `Dashboard`, `Cases`, `Updates` with crisp active states.
+    - Bottom: Connection chip: `● Demo Insurance Co. · Access active` with green dot.
+  - Small popover dropdown on chip click:
+    - Insurer name: `Demo Insurance Co.`
+    - Status: `Connected`
+    - Access: `Access active`
+    - Mode: `Read-only` (*“Read-only” appears only here. Nothing else on the site talks about limitations.*)
+    - Last check: `06:00 today`
+    - Demo triggers: `[ Run check now ]`, `[ Simulate check failure ]`
+  - Check failure alert: Chip turns amber (`“Check pending”`) with a one-line banner at the top of the content area:  
+    *“Rules may be out of date. Re-check in progress.”*
 - **Why we did it:**
-  - Enforces the exact JSON schema defined in `project.md` (Appendix A).
-  - Eliminates schema drift across the backend, insurer feed, and frontend.
-  - Ensures all dates (`effective_from`, `effective_to`, `service_date`) and timestamps use strict UTC formatting without timezone drift.
+  - Provides a clean, calm, professional layout where the dashboard and cases occupy the full content area, keeping navigation accessible while placing connection telemetry neatly at the bottom.
 
 ---
 
-### 2. Pure Deterministic Check Engine (`backend/app/engine/checker.py`)
+### 2. Page 1: Dashboard (`frontend/src/components/DashboardPage.tsx`)
 - **What was built:**
-  - Pure function: `evaluate_case(case, rules, governing_date) -> CaseCheckResult`.
-  - Strict rule applicability matching:
-    1. Matching insurer and plan scope (specific `plan_id` or wildcard `*`).
-    2. Exact target type and code matching (`drug`, `procedure`, `service`).
-    3. Status checking (ignoring `cancelled` and `superseded`).
-    4. Temporal boundary verification: `effective_from <= governing_date < effective_to`.
-  - Precedence resolution:
-    - Plan-specific rule beats wildcard `*`.
-    - Later `effective_from` beats earlier.
-    - Higher version beats lower version.
-    - Two disagreeing rules with identical precedence trigger `cannot_assess: conflicting rules`.
-  - Verdict generator producing item-level citations (Rule ID, version, effective date, source, and non-clinical officer guidance).
+  - **Row 1:** Exactly three number cards, nothing else in the row:
+    1. **Approved** (Green `#2A835F`): cases that are complete and covered (30 cases).
+    2. **Needs attention** (Amber `#D97706`): an update or rule affects the case (5 cases).
+    3. **Missing or wrong info** (Red `#DC2626`): a required document, number or field is missing, or a value is wrong (5 cases).
+  - **Row 2 Left:** Clean claims submission:
+    - Big percentage: $30 / 40 = 75.0\%$.
+    - Horizontal bar with editable target marker labelled `“Target 85%”`.
+  - **Row 2 Right:** Cases by specialty:
+    - Horizontal bars, one per specialty (Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology), sorted descending by count. Count at the end of each bar.
+    - Each bar split by the three statuses, using identical green, amber, red status colors.
+  - **Row 3:** Latest updates (the 3 most recent):
+    - One line each: what changed, effective date, number of open cases affected.
+    - `“View all updates”` link navigating to the Updates page.
+  - **No other widgets:** Zero money metrics, zero durations, zero aging.
 - **Why we did it:**
-  - Medical claims need 100% reproducibility. Running the same case on the same rules must yield identical results every time.
-  - Zero hallucination risk: the engine cannot "invent" coverage or guess missing codes.
+  - Keeps the dashboard uncluttered and immediately understandable. No more than 6 elements above the fold.
 
 ---
 
-### 3. Repository Store & Canonical Seed Data (`backend/app/db/store.py`)
+### 3. Page 2: Cases (`frontend/src/components/CasesPage.tsx`)
 - **What was built:**
-  - In-memory / SQLite data store with append-only audit logging.
-  - Lifecycle transition manager (`save_rule`): when an insurer publishes a delay or cancellation, the intermediate version is superseded while maintaining the active historical baseline.
-  - Canonical hackathon seed data:
-    - **Rule `R-101` v1:** `DRUG-A` covered under `PLAN-GOLD` from `2026-01-01`.
-    - **Rule `R-202` v1:** `PROC-1` requires prior approval from `2026-01-01`.
-    - **Service `SVC-9`:** Unknown service with no existing rule.
-    - **Case `C-001`:** Patient on `DRUG-A` (Service date: `Nov 10, 2026`) $\rightarrow$ Starts **Clear**.
-    - **Case `C-002`:** Patient on `DRUG-A` (Service date: `Oct 28, 2026`) $\rightarrow$ Starts **Clear** (and stays clear after Nov 1 rule change).
-    - **Case `C-003`:** Patient for `PROC-1` without prior approval $\rightarrow$ **Needs Attention**.
-    - **Case `C-004`:** Patient for `SVC-9` $\rightarrow$ **Cannot Assess** (No rule found).
-  - `reset_demo_state()`: Instantly restores everything to this pristine baseline.
+  - `“Upload patient file”` button.
+  - Clean table: `Case ID`, `Specialty`, `Status`, `Items (count)`.
+  - Filters:
+    - Status: `All`, `Approved`, `Needs attention`, `Missing or wrong info`.
+    - Specialty: `All`, `Cardiology`, `Oncology`, `Orthopedics`, `Neurology`, `Gastroenterology`.
+  - Clicking any row opens the Case Detail view.
 - **Why we did it:**
-  - Live hackathon presentations require a reliable reset button. If a judge asks to see the scenario again, one click restores the entire system without restarting servers.
+  - Gives officers immediate access to their claims without exposing raw insurer rule search engines.
 
 ---
 
-### 4. Impact Analyzer & Alert Lifecycle (`backend/app/impact/analyzer.py`)
+### 4. Page 3: Case Detail (`frontend/src/components/CaseDetailModal.tsx`)
 - **What was built:**
-  - Automatic re-evaluation of all open cases whenever rules change.
-  - Result diffing: detects if an item's status degraded (e.g., Covered $\rightarrow$ Excluded).
-  - Deduplicated compound keys: `(case_id, item_code, rule_id)`.
-  - **Auto-Closing Alerts:** When a rule exclusion is delayed past the case's service date or cancelled, the open alert is automatically closed with status `"closed"` and reason `"change delayed or cancelled by insurer"`.
+  - Header: Case ID, specialty, status badge.
+  - Item list showing one result per item: `Covered`, `Not covered`, `Prior approval needed`, `Document missing`, `Value wrong`.
+  - Single plain sentence format for every issue:
+    > *“Drug X is not covered from 1 Nov 2026. Rule R-1042. Review with the physician before submitting.”*
+  - Strict notification principle: agent only notifies; never edits, rejects, or submits, and never suggests a medical alternative.
 - **Why we did it:**
-  - Claims officers suffer from alert fatigue. Showing stale alerts for delayed policies causes unnecessary friction. Automatically clearing alerts when the insurer delays a change keeps advice 100% fresh.
+  - Eliminates administrative rework and prevents legal liability by never prescribing medical alternatives.
 
 ---
 
-### 5. FastAPI REST API & Insurer Simulator (`backend/app/main.py`)
+### 5. Page 4: Updates (`frontend/src/components/UpdatesPage.tsx`)
 - **What was built:**
-  - `/api/health`: Monitors feed freshness and flags stale feeds if sync age exceeds threshold or simulated outage is active.
-  - `/api/cases` & `/api/cases/{case_id}`: Full case listings and itemized rule verification cards.
-  - `/api/alerts` & `/api/alerts/{id}/acknowledge`: Alerts inbox and officer note recording.
-  - `/api/rules`: Searchable, filterable rule version history.
-  - `/api/audit`: Append-only audit trail for every action.
-  - **1-Click Insurer Simulator Endpoints:**
-    - `POST /api/simulator/exclude-drug-a`: Publishes `R-101 v2` excluding `DRUG-A` starting Nov 1 $\rightarrow$ Triggers alert on `C-001`.
-    - `POST /api/simulator/delay-drug-a`: Delays rule to Dec 1 $\rightarrow$ Closes alert on `C-001`.
-    - `POST /api/simulator/cancel-drug-a`: Cancels exclusion $\rightarrow$ Reverts to covered.
-    - `POST /api/simulator/toggle-outage`: Simulates feed outage $\rightarrow$ Displays yellow "Rules May Be Stale" banner.
-    - `POST /api/simulator/reset`: Full demo state reset.
+  - Reverse-chronological list of 6 updates from the insurer.
+  - Filter by type: `All`, `Drug`, `Procedure`, `Document`, `Approval`.
+  - Each entry: what changed, item type badge, effective date, status (`Announced`, `Effective`, `Delayed`, `Cancelled`), and `“Affects N open cases”` (clicking it filters Cases to those case IDs).
+  - Employees see updates and effect on their cases, but cannot browse or search raw insurer rules.
 - **Why we did it:**
-  - Makes the product instantly interactive for judges without needing manual API curl commands or database manipulations during the pitch.
+  - Gives officers transparency into upcoming policy revisions while maintaining payer intellectual property boundaries.
 
 ---
 
-### 6. Automated Golden Test Suite (`backend/tests/`)
+### 6. Backend Check Engine & Seed Data (`backend/app/db/store.py`, `backend/app/engine/checker.py`)
 - **What was built:**
-  - `test_engine.py`: Tests the baseline verdicts, rule exclusion alerts, temporal boundaries, and auto-closing delays.
-  - `test_api.py`: Tests API health, case listing, simulator workflows, and stale banner detection.
-- **Verification Result:**
-  - **7 passed out of 7 tests** in `0.19s`.
+  - Pure deterministic rule evaluation over versioned rules.
+  - 40 cases seeded across 5 specialties (Cardiology: 10, Oncology: 9, Orthopedics: 8, Neurology: 7, Gastroenterology: 6).
+  - Clean claims initially 75.0% against an 85.0% target marker.
+  - 6 insurer updates seeded.
+  - `“Run check now”` button / API endpoint (`POST /api/check/run-now`):
+    - Applies Rule R-1042 v2 (Drug A excluded Nov 1).
+    - Re-checks all 40 open cases.
+    - Moves 3 open cases (`C-001`, `C-005`, `C-008`) from **Approved** $\rightarrow$ **Needs attention**.
+    - Counts update dynamically: Approved drops from 30 to 27, Needs attention rises from 5 to 8, clean claims becomes 67.5%.
+  - Mock insurer endpoints: `GET /v1/rules/snapshot` and `GET /v1/rule-changes?since=` with server-scoped API key.
 
 ---
 
-## 📊 Current Status & Next Steps
+## 📊 Verification & Test Summary
 
 ```
-[x] Phase 1: Foundation, Schemas & Seed Dataset        (COMPLETED & VERIFIED)
-[x] Phase 2: Core Deterministic Engine & Insurer Sync   (COMPLETED & VERIFIED)
-[x] Phase 3: Claims Officer Dashboard UI               (COMPLETED & VERIFIED)
-    ├── Alerts Inbox view with before/after diffs
-    ├── Cases Explorer & Itemized Verification Modal
-    ├── Rules Library with version history modal
-    ├── Append-only Audit Trail view
-    └── Floating Insurer Simulator control bar
-[x] Phase 4: AI Clinical Document Extraction Modal      (COMPLETED & VERIFIED)
-[x] Phase 5: Automated Golden Test Suite (7/7 passing) (COMPLETED & VERIFIED)
-[x] Phase 6: Shakuro ACRU Dribbble Dashboard Redesign   (COMPLETED & VERIFIED)
-    ├── Light theme canvas (#F4F5F7) & crisp white cards (#FFFFFF)
-    ├── Left vertical navigation sidebar with direct feed health widget
-    ├── Top header with search, officer profile & "+ Intake File" CTA
-    ├── Bento Grid Dashboard Overview:
-    │   ├── Weekly stacked caseload activity chart with peak tooltip
-    │   ├── Vibrant emerald/lime Insurer Direct Feed Card & quick actions
-    │   ├── Clean claims submission target progress bar (90% compliance)
-    │   ├── Specialty caseload exposure distribution
-    │   ├── Radial semi-circle zero-denial compliance gauge
-    │   └── Live policy alert feed stream
-    ├── Executive Rollup Banner: "Insurer A no longer covers [Item] effective [Date]. Of the 30 claims, these 3 are affected..."
-    ├── Sample 1 & Sample 2 Agent Determination Banners:
-    │   ├── Sample 1: "Agent Determination: Verified Clean — File is Complete & Ready to Submit"
-    │   └── Sample 2: "Agent Determination: Rejection Risk Detected — Take file to treating physician before submission to choose a covered alternative drug"
-    └── 30 realistic hospital claims caseload with instant 1-click simulator
-[ ] Phase 7: Live Demo Pitch Walkthrough & Polish      (READY TO REHEARSE)
-    ├── 3-Minute Live Judging Click Script
-    ├── Pitch Deck outline & value stats
-    └── Optional Autonomous Agent/Daemon sync worker
+=================================================================
+📊 QA TEST SUMMARY: 38 PASSED | 0 FAILED (Total: 38)
+=================================================================
+[x] Phase 0: System reset returns 200
+[x] Phase 1: 40 cases across 5 specialties, clean claims < target, 3 dashboard cards
+[x] Phase 2: Header chip shows "Demo Insurance Co.", "Access active", "Read-only" in popover only
+[x] Phase 3: Case detail item results, rule reference, single plain sentence format
+[x] Phase 4: "Run check now" moves 3 open cases to Needs attention, updates counts
+[x] Phase 5: Target editing & check failure simulation (amber chip, warning banner)
+[x] Phase 6: Restricted employee view (no raw rules listing reachable)
+
+Pytest Unit Suite: 9 / 9 PASSED in 0.19s
+Vite Production Build: Built in 305ms with 0 errors
 ```

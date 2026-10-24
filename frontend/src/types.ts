@@ -1,4 +1,14 @@
-export type RuleCategory = 'drug' | 'procedure' | 'service' | 'required_document' | 'prior_approval';
+export type CaseStatusType = 'Approved' | 'Needs attention' | 'Missing or wrong info';
+
+export type ItemResultType =
+  | 'Covered'
+  | 'Not covered'
+  | 'Prior approval needed'
+  | 'Document missing'
+  | 'Value wrong'
+  | 'No rule found, verify with the insurer';
+
+export type RuleCategory = 'drug' | 'procedure' | 'service' | 'required_document' | 'prior_approval' | 'document' | 'approval';
 export type RuleEffect = 'covered' | 'excluded' | 'requires_prior_approval' | 'requires_documents';
 export type RuleStatus = 'announced' | 'effective' | 'delayed' | 'cancelled' | 'superseded';
 
@@ -36,45 +46,54 @@ export interface Diagnosis {
   description?: string;
 }
 
-export interface Case {
-  case_id: string;
-  insurer_id: string;
-  plan_id: string;
-  member_ref: string;
-  service_date: string;
-  visit_type: string;
-  diagnoses: Diagnosis[];
-  items: CaseItem[];
-  documents: string[];
-  prior_approval_ref?: string | null;
-  status: 'open' | 'submitted' | 'closed';
-  officer_id?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export type VerdictType = 'covered' | 'excluded' | 'prior_approval_needed' | 'documents_missing' | 'no_rule_found' | 'cannot_assess';
-export type SeverityType = 'clear' | 'action_needed' | 'verify' | 'info';
-
 export interface ItemVerdict {
   item: CaseItem;
-  verdict: VerdictType;
-  severity: SeverityType;
+  result: ItemResultType;
+  verdict?: string;
+  severity?: string;
   rule_id?: string;
   rule_version?: number;
+  effective_date?: string;
   effective_from?: string;
   source_ref?: string;
-  explanation: string;
+  explanation?: string;
+  plain_sentence: string;
+  rule_reference: string;
+  what_to_do: string;
   suggested_officer_action?: string;
+  full_issue_text: string;
+}
+
+export interface Case {
+  case_id: string;
+  insurer_id?: string;
+  insurer_name?: string;
+  plan_id?: string;
+  member_ref: string;
+  group_number?: string;
+  specialty: string;
+  status: CaseStatusType;
+  items_count: number;
+  service_date: string;
+  visit_type?: string;
+  diagnoses?: Diagnosis[];
+  items: CaseItem[];
+  documents?: string[];
+  prior_approval_ref?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export type CaseOverallStatus = 'clear' | 'needs_attention' | 'cannot_assess';
 
 export interface CaseCheckResult {
   case_id: string;
-  governing_date: string;
-  overall_status: CaseOverallStatus;
+  specialty: string;
+  status: CaseStatusType;
+  overall_status?: CaseOverallStatus;
+  items_count: number;
   results: ItemVerdict[];
+  governing_date?: string;
   checked_at: string;
 }
 
@@ -83,6 +102,12 @@ export interface CaseSummary {
   overall_status: CaseOverallStatus;
   items_count: number;
   findings_count: number;
+}
+
+export interface CaseDetailResponse {
+  case: Case;
+  check_result: CaseCheckResult;
+  alerts?: Alert[];
 }
 
 export interface AlertChange {
@@ -109,6 +134,19 @@ export interface Alert {
   officer_note?: string;
 }
 
+export interface InsurerUpdateEntry {
+  update_id: string;
+  headline: string;
+  item_type: 'drug' | 'procedure' | 'document' | 'approval';
+  effective_date: string;
+  status: 'Announced' | 'Effective' | 'Delayed' | 'Cancelled';
+  affected_cases_count: number;
+  affected_case_ids: string[];
+  rule_id: string;
+  rule_version: number;
+  published_at: string;
+}
+
 export interface HealthStatus {
   status: 'healthy' | 'warning';
   feed_connected: boolean;
@@ -127,4 +165,80 @@ export interface AuditEntry {
   actor: string;
   action: string;
   details: Record<string, any>;
+}
+
+export type UserRole = 'employee' | 'admin';
+
+export interface InsurerPermissionItem {
+  permission: string;
+  status: 'Allowed' | 'Not allowed';
+  enforcement_detail: string;
+}
+
+export interface InsurerCheckLogEntry {
+  check_id: string;
+  timestamp: string;
+  endpoint: string;
+  status_code: number;
+  rule_digest: string;
+  latency_ms: number;
+  summary?: string;
+}
+
+export interface InsurerConnectionInfo {
+  insurer_name: string;
+  status: string;
+  access_status: string;
+  read_only: boolean;
+  last_check_time: string;
+  is_check_failed: boolean;
+  warning_banner?: string | null;
+  // Backward compatibility fields
+  insurer_id?: string;
+  service_name?: string;
+  connection_status?: 'connected' | 'degraded' | 'revoked_by_insurer';
+  is_revoked_by_insurer?: boolean;
+  token_scope?: string;
+  token_held_by?: string;
+  allowed_endpoints?: string[];
+  last_sync_time?: string;
+  rules_count?: number;
+  detail_level?: 'minimal' | 'excerpt';
+  permissions?: InsurerPermissionItem[];
+  recent_checks?: InsurerCheckLogEntry[];
+  rate_limit?: {
+    max_checks_per_minute: number;
+    current_checks_last_minute: number;
+    is_throttled: boolean;
+  };
+  anomaly_status?: {
+    anomalies_detected: number;
+    status: 'clean' | 'warning';
+    anti_scraping_active: boolean;
+  };
+}
+
+export interface SpecialtyBarData {
+  specialty: string;
+  total: number;
+  approved: number;
+  needs_attention: number;
+  missing_or_wrong_info: number;
+}
+
+export interface DashboardData {
+  counts: {
+    approved: number;
+    needs_attention: number;
+    missing_or_wrong_info: number;
+    total_checked: number;
+  };
+  clean_claims: {
+    percentage: number;
+    approved_count: number;
+    total_checked: number;
+    target: number;
+  };
+  specialties: SpecialtyBarData[];
+  latest_updates: InsurerUpdateEntry[];
 }

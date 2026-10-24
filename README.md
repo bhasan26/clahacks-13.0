@@ -1,265 +1,237 @@
-# CoverageGuard 🛡️
-### Autonomous Health Insurance Coverage Sentinel & Denial Prevention Platform
+# Coverage Guard 🛡️
+### AI Agent for Hospital Insurance-Claims Officers
 
 [![Hackathon](https://img.shields.io/badge/Hackathon-CalHacks%2013.0-FF5722?style=flat-square&logo=hackerearth)](https://calhacks.io)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18.3+-61DAFB?style=flat-square&logo=react)](https://reactjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5+-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
-[![Pydantic v2](https://img.shields.io/badge/Pydantic-v2-E92063?style=flat-square&logo=pydantic)](https://docs.pydantic.dev)
-[![Tests](https://img.shields.io/badge/Tests-7%20Passed%20(100%25)-brightgreen?style=flat-square&logo=pytest)](file:///Users/bilalhasan/clahacks-13.0/clahacks-13.0/backend/tests)
-[![Zero Hallucination](https://img.shields.io/badge/Engine-Zero--Hallucination%20Deterministic-blueviolet?style=flat-square)]()
-[![Design](https://img.shields.io/badge/Design-Shakuro%20ACRU%20Bento-lime?style=flat-square)]()
+[![Vite](https://img.shields.io/badge/Vite-6.4+-646CFF?style=flat-square&logo=vite)](https://vitejs.dev)
+[![Tests](https://img.shields.io/badge/QA%20Tests-38%2F38%20Passed-brightgreen?style=flat-square&logo=pytest)](file:///Users/bilalhasan/clahacks-13.0/clahacks-13.0/backend/tests/qa_e2e_runner.py)
 
 ---
 
-## 📌 Executive Summary
+## 📌 What It Is
 
-Health insurance companies update clinical coverage policies, exclusions, prior-authorization mandates, and required documentation an average of **40 times per week**. Hospitals typically learn about these changes post-facto through fragmented PDF circulars, portal updates, or claims rejection notices. 
+**Coverage Guard** is an AI agent for a hospital insurance-claims officer, with a simple, calm web interface on top.
 
-When a claim is prepared on yesterday's guidelines and filed after a policy revision, the claim is rejected. This triggers administrative rework, delays patient care, and results in millions of dollars in avoidable revenue-cycle losses.
+The officer uploads a patient file and prescription. The agent checks every item (drug, procedure, service) against the insurer’s current rules and reports whether the case is:
+* **Approved** (Green `#2A835F`)
+* **Needs attention** (Amber `#D97706`)
+* **Missing or wrong info** (Red `#DC2626`)
 
-**CoverageGuard** bridges this gap by acting as an autonomous sentinel between commercial health insurers and hospital billing departments. It continuously ingests versioned payer policy feeds, monitors the hospital's open claims caseload, and proactively warns billing officers **before** claims are submitted.
-
-> ### 🏛️ Core Architectural Principle
-> **"Code decides coverage; the AI model only extracts clinical notes and drafts wording."**  
-> Every coverage verdict, temporal boundary check, and denial alert is calculated by a **100% deterministic Python rule engine**. LLMs are strictly isolated to document parsing and PII redaction to prevent clinical hallucinations.
-
----
-
-## ✨ Key Features & Capabilities
-
-* **Deterministic Coverage Verification:**  
-  Pure function rule evaluation resolving policy scope (`plan_id` vs wildcard `*`), item categories (drugs, procedures, consultation services), and temporal validity intervals (`effective_from <= date < effective_to`).
-* **Caseload Impact Rollup Alerting:**  
-  When an insurer amends or excludes a code, the platform instantly re-evaluates all open claims and produces executive rollup notifications:
-  > *"Insurer A no longer covers DRUG-A effective Nov 1, 2026. Of the 30 open claims, these 3 are affected: Case C-001, Case C-005, Case C-008."*
-* **Physician Formulary Intervention:**  
-  Differentiates between clean, ready-to-file claims and rejection risks:
-  * **Sample 1 (Verified Clean):** Confirms all codes are covered and all prior authorizations are valid $\rightarrow$ *"File is Complete & Ready to Submit"*.
-  * **Sample 2 (Rejection Risk Detected):** Flags gaps and directs staff $\rightarrow$ *"Take file to treating physician before submission to choose a covered alternative drug"*.
-* **Dynamic Lifecycle & Auto-Closing Alerts:**  
-  Tracks the full policy lifecycle (`announced`, `effective`, `delayed`, `cancelled`, `superseded`). If an insurer delays or cancels an announced exclusion, the alert is automatically closed with an audit reason, preventing alert fatigue.
-* **Shakuro "ACRU" Bento Grid UI:**  
-  Clean light design system (`#F4F5F7` canvas, `#FFFFFF` cards, `#84CC16` lime accents) featuring:
-  * Stacked weekly caseload activity bar chart with peak tooltip.
-  * Insurer Direct Feed telemetry card and 1-click sync.
-  * Semi-circle radial compliance gauge (90% clean claims rate).
-  * Caseload distribution by medical specialty.
-* **Append-Only Regulatory Audit Log:**  
-  Every check execution, policy sync, and officer acknowledgment is recorded immutably with timestamp, actor, and cited rule versions.
-* **AI Clinical File Intake with PII Redaction:**  
-  Powered by Google Gemini (`gemini-flash-lite-latest`) with a deterministic regex fallback. Extracts clinical codes while redacting patient names and identifiers.
-* **Interactive 1-Click Simulator Dock:**  
-  Allows judges and operators to simulate real-world payer actions (exclude drug, delay effective date, cancel exclusion, simulate feed outage, or reset demo state) with live UI feedback.
+The agent is connected to the insurer’s system, checks it every day for updates, and re-checks all open cases after each check.
 
 ---
 
-## 🏛️ System Architecture
+## 📏 Rules for the Whole Interface
+
+1. **Clear, simple, uncluttered:** One purpose per page, no more than 6 elements above the fold.
+2. **Numbers only:** No days, durations, turnaround times, or aging.
+3. **No money metrics:** No total monitored value, no “denials prevented”.
+4. **Plain wording:**
+   * `“Approved”`
+   * `“Needs attention”`
+   * `“Missing or wrong info”`
+5. **Calm, professional look:**
+   * Pure white background (`#FFFFFF`), dark green text (`#092328`), brand accents: `#12544F`, `#2A835F`, `#8BBB92`.
+   * Standard status conventions:
+     * **Green (`#2A835F`)** for Approved
+     * **Amber/Yellow (`#D97706`)** for Needs attention
+     * **Red (`#DC2626`)** for Missing or wrong info
+   * The **same three colors are used everywhere** a status appears: dashboard cards, specialty bars, case list badges, item results, and update status.
+
+---
+
+## 🧭 Site Structure & Pages
+
+### Sidebar (Left Navigation on Every Page)
+* **Top:** `“Coverage Guard”` brand mark and `“Claims Sentinel”` identifier.
+* **Vertical Navigation:** Clean, calm vertical menu items:
+  * `Dashboard`
+  * `Cases`
+  * `Updates`
+* **Bottom:** Connection chip with the insurer’s name, a green dot, and `“Access active”`:
+  $$\text{● Demo Insurance Co. · Access active}$$
+* **Clicking the chip opens a small popover:**
+  * Insurer name (`Demo Insurance Co.`)
+  * `“Connected”`
+  * `“Access active”`
+  * `“Read-only”` (*“Read-only” appears only here. Nothing else on the site talks about limitations.*)
+  * Last check time (`06:00 today`)
+  * Quick demo triggers: `[ Run check now ]`, `[ Simulate check failure ]`
+* **Outage / Check Failure Alert:** If the check failed, the chip turns amber (`“Check pending”`) with a one-line banner at the top of the content area:  
+  *“Rules may be out of date. Re-check in progress.”*
+
+---
+
+### Page 1: Dashboard
 
 ```
- HOSPITAL WORKFLOW               COVERAGEGUARD PLATFORM                  PAYER ECOSYSTEM
- ┌─────────────────┐             ┌────────────────────────────────┐
- │ Claims Officer  │◄──(HTTPS)──►│ React + TypeScript SPA         │
- │ (Dr. Bilal)     │             │ ├ Bento Grid Dashboard         │
- └─────────────────┘             │ ├ Alerts Inbox & Caseload View │
-                                 │ ├ Payer Rules Explorer         │
- ┌─────────────────┐             │ └ 1-Click Simulator Bar        │
- │ Clinical Notes  │             └───────────────┬────────────────┘
- │ & EHR Records   │                             │
- └────────┬────────┘                             │ REST API
-          │                                      ▼
-          │ Intake Form          ┌────────────────────────────────┐
-          └─────────────────────►│ FastAPI Sentinel Backend       │
-                                 │ ├ Pure Deterministic Engine    │
-                                 │ │  (effective_from <= date)    │
-                                 │ ├ Sentinel Impact Analyzer     │
-                                 │ ├ Gemini AI Clinical Parser    │
-                                 │ ├ In-Memory / SQLite Store     │
-                                 │ └ Append-Only Audit Logger     │
-                                 └───────────────┬────────────────┘
-                                                 │
-                                                 │ Payer Feed Protocol (v2)
-                                                 ▼
-                                 ┌────────────────────────────────┐
-                                 │ Commercial Insurer Feed        │
-                                 │ (Real-time Rulebooks & Delays) │
-                                 └────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ ROW 1: THREE NUMBER CARDS                                             │
+│ ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────┐ │
+│ │ Approved          30 │ │ Needs attention    5 │ │ Missing/wrong  5 │ │
+│ │ Complete & covered   │ │ Update/rule affects  │ │ Field/value err  │ │
+│ └──────────────────────┘ └──────────────────────┘ └──────────────────┘ │
+├────────────────────────────────────────────────────────────────────────┤
+│ ROW 2: CLEAN CLAIMS (LEFT)             │ CASES BY SPECIALTY (RIGHT)    │
+│ Clean claims submission                │ Cases by specialty            │
+│ 75.0% (30 of 40 cases clean)           │ Cardiology     10 [====|==|==]│
+│ [====================|               ] │ Oncology        9 [====|==|==]│
+│                     Target 85%         │ Orthopedics     8 [====|==|==]│
+│ (Target marker is editable by admin)   │ Neurology       7 [====|==|==]│
+│                                        │ Gastroenterol.  6 [====|==|==]│
+├────────────────────────────────────────────────────────────────────────┤
+│ ROW 3: LATEST UPDATES (THE 3 MOST RECENT)                              │
+│ • Formulary revision: Drug A excluded · Effective 1 Nov 2026 · Affects 3 │
+│ • Prior authorization mandate for PROC-1 · Effective 15 Oct · Affects 2│
+│ • Genetics panel report required · Effective 15 Nov 2026 · Affects 1   │
+│                                                [ View all updates → ] │
+└────────────────────────────────────────────────────────────────────────┘
 ```
+
+* **Row 1:** Three number cards, nothing else in the row:
+  * **Approved:** cases that are complete and covered.
+  * **Needs attention:** an update or rule affects the case.
+  * **Missing or wrong info:** a required document, number or field is missing, or a value is wrong.
+* **Row 2, Left:** Clean claims submission.
+  * Big percentage: cases that passed the check with no issues $\div$ all checked cases ($30 / 40 = 75.0\%$).
+  * Horizontal bar with a marker for the target, labelled `“Target 85%”`. The target is editable by the admin.
+* **Row 2, Right:** Cases by specialty.
+  * Horizontal bars, one per specialty (Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology), sorted descending by count.
+  * Count at the end of each bar.
+  * Each bar split by the three statuses, using the same three colors (green, amber, red).
+* **Row 3:** Latest updates (the 3 most recent).
+  * One line each: what changed, effective date, number of open cases affected.
+  * A `“View all updates”` link goes to the Updates page.
+* **No other widgets.**
 
 ---
 
-## 📂 Project Structure
+### Page 2: Cases
 
-```bash
-clahacks-13.0/
-├── dev.sh                     # Unified startup script (Backend + Frontend)
-├── project.md                 # Detailed problem specification & requirements
-├── PROGRESS.md                # Engineering audit and development log
-├── backend/
-│   ├── app/
-│   │   ├── domain/
-│   │   │   └── models.py      # Pydantic v2 schemas (Rule, Case, Alert, Audit)
-│   │   ├── engine/
-│   │   │   └── checker.py     # Pure deterministic rule evaluation engine
-│   │   ├── impact/
-│   │   │   └── analyzer.py    # Caseload re-evaluation & auto-closing alert manager
-│   │   ├── db/
-│   │   │   └── store.py       # Data repository & 30 canonical hospital claims
-│   │   └── main.py            # FastAPI endpoints, simulator, & Gemini AI intake
-│   ├── tests/
-│   │   ├── conftest.py        # Pytest configuration & path resolution
-│   │   ├── test_engine.py     # Golden test suite for deterministic rules
-│   │   └── test_api.py        # End-to-end API integration tests
-│   └── requirements.txt       # Python dependencies
-└── frontend/
-    ├── src/
-    │   ├── api.ts             # Typed REST API client
-    │   ├── types.ts           # Frontend TypeScript contract interfaces
-    │   ├── App.tsx            # Application entry & view router
-    │   ├── components/
-    │   │   ├── Sidebar.tsx           # Vertical navigation & live feed health
-    │   │   ├── TopBar.tsx            # Header search, profile & intake trigger
-    │   │   ├── DashboardOverview.tsx # Shakuro ACRU Bento Grid dashboard
-    │   │   ├── AlertsInbox.tsx       # Rollup banner & alert diff views
-    │   │   ├── CasesExplorer.tsx     # 30-case claims table & status chips
-    │   │   ├── CaseDetailModal.tsx   # Verified clean vs rejection risk modals
-    │   │   ├── ClinicalIntakeModal.tsx # Gemini AI file extractor (Sample 1 & 2)
-    │   │   ├── RulesLibrary.tsx      # Versioned payer rulebook explorer
-    │   │   ├── AuditLogView.tsx      # Immutable regulatory audit trail
-    │   │   ├── SimulatorBar.tsx      # 1-Click floating dock controls
-    │   │   └── StaleBanner.tsx       # Feed disconnection warning banner
-    └── package.json           # Frontend dependencies & Vite configuration
-```
+* `“Upload patient file”` button (patient file + prescription).
+* **Table:**
+  * Columns: `Case ID`, `Specialty`, `Status`, `Items (count)`.
+  * Filters: `Status` (All, Approved, Needs attention, Missing or wrong info) and `Specialty` (All, Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology).
+* Clicking a row opens the case detail view.
+
+---
+
+### Page 3: Case Detail
+
+* **Header:** Case ID, specialty, status badge.
+* **Item List:** Each item shows one result:
+  * `Covered`
+  * `Not covered`
+  * `Prior approval needed`
+  * `Document missing`
+  * `Value wrong`
+* **Single Plain Sentence Format:** Each issue gets:
+  1. One plain sentence.
+  2. The rule reference.
+  3. What to do.
+  > *Example:* **“Drug X is not covered from 1 Nov 2026. Rule R-1042. Review with the physician before submitting.”**
+* **Strict Principle:** The agent only notifies. It **never edits, rejects or submits, and never suggests a medical alternative.**
+
+---
+
+### Page 4: Updates
+
+* Reverse-chronological list of recent updates from the insurer (6 entries).
+* Each entry:
+  * What changed (headline)
+  * Item type badge (`Drug` / `Procedure` / `Document` / `Approval`)
+  * Effective date (e.g., `1 Nov 2026`)
+  * Status (`Announced` / `Effective` / `Delayed` / `Cancelled`)
+  * `“Affects N open cases”` (linking/filtering to those cases).
+* Filter by type (`All`, `Drug`, `Procedure`, `Document`, `Approval`).
+* Employees see updates and their effect on their own cases. They cannot browse or search raw insurer rules.
+
+---
+
+## ⚙️ How the Agent Works (Backend)
+
+* **Stack:** FastAPI, PostgreSQL / In-Memory Store, React + TypeScript, Vite.
+* **Insurer Connection:** A mock insurer service exposes:
+  * `GET /v1/rules/snapshot`
+  * `GET /v1/rule-changes?since=`
+  * With an API key scoped to `rules:read`. The key stays strictly on the server.
+* **Daily Check Scheduled Job:** Pulls the insurer’s rules, stores each version, and records changes.
+* **“Run check now” Button:** Admin demo trigger:
+  * Applies an announced rule change (Drug A excluded from 1 Nov 2026 under Rule R-1042).
+  * Automatically re-checks all 40 open cases.
+  * Moves 3 open cases (`C-001`, `C-005`, `C-008`) from **Approved** $\rightarrow$ **Needs attention**.
+  * Updates counts, updates the clean claims percentage, and prepends an entry on the Updates page.
+* **Deterministic Code:** Coverage decisions come from pure deterministic Python logic over versioned rules. The LLM only extracts fields from uploaded files. It never decides coverage.
+* **No Matching Rule:** Returns `“No rule found, verify with the insurer”`.
+* **Audit Log:** Append-only; stores case, rule ID, rule version, and time.
+
+---
+
+## 📊 Seed Data for the Demo
+
+1. **40 Cases across 5 Specialties:**
+   * **Cardiology (10 cases):** `C-001`, `C-002`, `C-005`, `C-008`, `C-011`, `C-012`, `C-013`, `C-014`, `C-015`, `C-016`
+   * **Oncology (9 cases):** `C-017`, `C-018`, `C-019`, `C-020`, `C-021`, `C-022`, `C-023`, `C-024`, `C-025`
+   * **Orthopedics (8 cases):** `C-003`, `C-026`, `C-027`, `C-028`, `C-029`, `C-030`, `C-031`, `C-032`
+   * **Neurology (7 cases):** `C-033`, `C-034`, `C-035`, `C-036`, `C-037`, `C-038`, `C-039`
+   * **Gastroenterology (6 cases):** `C-004`, `C-040`, `C-006`, `C-007`, `C-009`, `C-010`
+2. **Initial Status Mix:**
+   * **Approved:** 30 cases
+   * **Needs attention:** 5 cases
+   * **Missing or wrong info:** 5 cases
+   * Clean claims = $30 / 40 = 75.0\%$ (below the $85.0\%$ target marker, making it visually meaningful).
+3. **6 Updates:**
+   * `UPD-106`: Drug A excluded from commercial formulary (drug, 1 Nov 2026, Announced, affects 3 cases: C-001, C-005, C-008)
+   * `UPD-105`: Prior authorization required for Joint Procedure PROC-1 (procedure, 15 Oct 2026, Effective, affects 2 cases: C-003, C-014)
+   * `UPD-104`: Genetics panel report required for Targeted Biotherapy (document, 15 Nov 2026, Announced, affects 1 case: C-019)
+   * `UPD-103`: Neurology nerve conduction test authorization window expanded (approval, 1 Oct 2026, Effective, affects 0 cases)
+   * `UPD-102`: Cardiology pacemaker lead revision criteria delayed to 1 Dec (procedure, 1 Dec 2026, Delayed, affects 0 cases)
+   * `UPD-101`: Gastroenterology endoscopy pre-cert mandate cancelled (approval, 15 Sep 2026, Cancelled, affects 0 cases)
+
+---
+
+## 🎬 Acceptance Criteria Verification
+
+| Acceptance Criterion | Implementation & Verification | Status |
+| :--- | :--- | :---: |
+| **1. Uncluttered Dashboard** | Shows exactly 3 cards in Row 1, clean claims against target (Row 2L), specialty bars (Row 2R), and latest 3 updates (Row 3). No other widgets. | **PASS** |
+| **2. Zero Durations / Money** | No page shows days, durations, turnaround times, aging, money, or “denials prevented”. Numbers only. | **PASS** |
+| **3. Header Chip & Popover** | Chip shows `● Demo Insurance Co. · Access active`. Clicking chip reveals popover with `Read-only` (*only* appears here!). | **PASS** |
+| **4. Run Check Now Dynamics** | Triggers check with new rule change, updates counts ($30 \rightarrow 27$ Approved, $5 \rightarrow 8$ Needs attention), flags C-001, C-005, C-008. | **PASS** |
+| **5. Restricted Employee View** | Employees navigate Dashboard, Cases, Updates. No page or API route allows listing or searching raw insurer rules. | **PASS** |
+| **6. Issue Naming** | Every issue names its Rule ID (e.g., `Rule R-1042.`), effective date (e.g., `1 Nov 2026`), and plain action. | **PASS** |
 
 ---
 
 ## 🚀 Quickstart Guide
 
-### Prerequisites
-* **Python 3.11+** (Python 3.12 recommended)
-* **Node.js 18+** & **npm**
-
-### Option A: 1-Click Automated Startup (Recommended)
-
-Run the root development script:
+### 1-Click Startup
+Run the root startup script:
 ```bash
 chmod +x dev.sh
 ./dev.sh
 ```
-This automatically boots:
-* **FastAPI Backend:** [http://127.0.0.1:8000](http://127.0.0.1:8000) (Swagger docs: [`/docs`](http://127.0.0.1:8000/docs))
-* **Vite React UI:** [http://localhost:5173](http://localhost:5173)
+* **Frontend:** [http://localhost:5173](http://localhost:5173)
+* **Backend:** [http://127.0.0.1:8000](http://127.0.0.1:8000)
 
----
-
-### Option B: Manual Setup
-
-#### 1. Backend Setup
+### Run Tests
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+# 1. Run full 38-check E2E QA Acceptance suite
+python3 backend/tests/qa_e2e_runner.py
 
-# Start the API server with auto-reload
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-```
+# 2. Run Pytest unit suite
+backend/.venv/bin/pytest backend/tests/test_engine.py backend/tests/test_api.py -v
 
-#### 2. Frontend Setup
-```bash
-cd frontend
-npm install
-
-# Start the Vite development server
-npm run dev
+# 3. Verify Frontend build
+cd frontend && npm run build
 ```
 
 ---
 
-## 🧪 Automated Testing
+## 👥 Contributors
 
-The deterministic check engine and API endpoints are validated by automated golden test suites:
-
-```bash
-# Run pytest from project root
-backend/.venv/bin/pytest backend/tests -v
-```
-
-### Test Coverage Highlights:
-* `test_baseline_verdicts`: Verifies that `DRUG-A` on `PLAN-GOLD` evaluates as **Covered** prior to policy cutoff dates.
-* `test_rule_change_and_alerts`: Validates that amending `R-101` to `EXCLUDED` immediately triggers high-priority alerts with itemized citations.
-* `test_temporal_boundary`: Asserts that claims scheduled prior to the exclusion date remain untouched and clean.
-* `test_delay_closes_alert`: Confirms that delaying an exclusion automatically transitions open alerts to `closed` with audit reason.
-* `test_api_health_and_cases`: Tests REST health telemetry and caseload retrieval across all 30 claims.
-* `test_simulator_workflow`: Validates 1-click simulator state changes and rulebook updates.
-* `test_stale_feed_detection`: Ensures outage simulation triggers the stale feed warning banner.
-
----
-
-## 🎬 3-Minute Live Judging Click Script
-
-Follow this script to demonstrate the platform to judges, clinicians, or revenue cycle directors:
-
-| Step | Action in UI | Expected System Behavior | What to Tell the Judges |
-| :--- | :--- | :--- | :--- |
-| **1. Baseline State** | Open [http://localhost:5173](http://localhost:5173). Notice the Bento Grid Overview. | Shows **30 Active Claims**, **90% Compliant**, 0 open alerts, green **Insurer Direct Feed** card. | *"We are monitoring 30 active hospital claims against current payer contracts. Everything is clean and synchronized."* |
-| **2. AI Clinical Intake (Sample 1)** | Click **`+ Intake File`** in the top bar. Click **`✓ Sample 1 (Complete)`**, then **`Confirm Fields & Run Coverage Check`**. | Case details modal opens showing the green banner: **Verified Clean — File is Complete & Ready to Submit**. | *"The AI extracts clinical codes and redacts PII, but deterministic Python code evaluates coverage. Sample 1 satisfies all criteria and is cleared for filing."* |
-| **3. AI Clinical Intake (Sample 2)** | Click **`+ Intake File`**, click **`⚠ Sample 2 (Gaps)`**, then **`Confirm Fields & Run Coverage Check`**. | Case modal opens with high-contrast red banner: **Rejection Risk Detected — Take file to treating physician before submission**. | *"Sample 2 identifies that the prescribed drug is excluded under upcoming rules and prior authorization is missing. Staff are instructed to have the physician choose a covered alternative before submission."* |
-| **4. Payer Policy Change** | In the bottom floating simulator dock, click **`Exclude Drug A (Nov 1)`**. | Toast confirms policy published. The **Policy Alerts** tab highlights with a red counter badge (`3`). | *"Insurer A just announced that DRUG-A is excluded starting Nov 1. The sentinel automatically re-evaluated all 30 open claims."* |
-| **5. Executive Rollup Banner** | Click the **Policy Alerts** tab in the sidebar. | Top banner displays: *"Insurer A no longer covers DRUG-A effective Nov 1, 2026. Of the 30 open claims, these 3 claims are affected: Case C-001, Case C-005, Case C-008."* | *"The officer doesn't need to manually cross-reference 30 claims. The system identifies the exact cases affected and explains the financial risk."* |
-| **6. Payer Delays Change** | Click **`Delay to Dec 1`** in the floating simulator bar. | The alerts are automatically updated to **Closed** with reason *"change delayed or cancelled by insurer"*. | *"Insurers often delay rule changes. CoverageGuard auto-closes the alert so billing staff aren't acting on outdated warnings."* |
-| **7. Feed Outage Warning** | Click **`Simulate Outage`** in the dock. | A warning banner appears across the top: *"Payer Rules Feed Disconnected — Rules may be out of date"*. | *"If the payer feed goes down, staff are alerted that checks may be using stale rules."* |
-| **8. Instant Reset** | Click **`Reset Demo`** in the bottom dock. | Caseload and rules are instantly restored to the clean baseline. | *"One click resets the entire platform for the next test."* |
-
----
-
-## 📡 API Reference Summary
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/health` | Payer feed freshness, active rule counts, and outage flags. |
-| `GET` | `/api/cases` | Summaries and statuses of all 30 hospital claims. |
-| `GET` | `/api/cases/{case_id}` | Detailed claim view, itemized verdicts, and cited rule versions. |
-| `POST` | `/api/cases/extract` | Gemini AI clinical note entity extraction and PII redaction. |
-| `POST` | `/api/cases` | Create and store a new clinical case. |
-| `GET` | `/api/rules` | Complete versioned rulebook across all payers and plans. |
-| `GET` | `/api/alerts` | Active and historical caseload impact alerts. |
-| `POST` | `/api/alerts/{alert_id}/acknowledge` | Record claims officer review and audit notes. |
-| `POST` | `/api/sync` | Manually trigger payer feed synchronization and caseload impact analysis. |
-| `GET` | `/api/audit` | Append-only regulatory audit trail. |
-| `POST` | `/api/simulator/exclude-drug-a` | Publish rule `R-101 v2` excluding `DRUG-A` on 2026-11-01. |
-| `POST` | `/api/simulator/delay-drug-a` | Delay rule `R-101` to 2026-12-01 (auto-closes affected alerts). |
-| `POST` | `/api/simulator/cancel-drug-a` | Cancel exclusion rule (reverts coverage to baseline). |
-| `POST` | `/api/simulator/toggle-outage` | Toggle simulated payer feed downtime. |
-| `POST` | `/api/simulator/reset` | Restore baseline seed data and reset all alerts. |
-
----
-
-## 🔒 Security & Compliance Principles
-
-1. **HIPAA & PII Isolation:**  
-   Direct patient names and identifiers are scrubbed and replaced with synthetic member tokens (`M-XXXX`) prior to extraction.
-2. **Zero Clinical Hallucination:**  
-   Verdicts are strictly computed via Boolean logic over database records; the LLM never generates or modifies coverage rules.
-3. **Read-Only Insurer Scoping:**  
-   The platform consumes payer policy and formulary catalogs; no sensitive hospital pricing or claims transmission data is sent back to the insurer feed.
-4. **Immutable Audit Trail:**  
-   Every state modification is appended to an immutable audit record containing actor ID, UTC timestamp, and payload diffs for complete regulatory defensibility.
-
----
-
-## 👥 Contributors & Team
-
-Proudly built for **CalHacks 13.0** (UC Berkeley).
-
-| Contributor | GitHub Profile | Role |
-| :--- | :--- | :--- |
-| **Bilal Hasan** | [@bhasan26](https://github.com/bhasan26) | Lead AI Engineer & Full-Stack Architect |
-| **H. Lagunes** | [@hlagunes01](https://github.com/hlagunes01) / [@hlagunes01-bot](https://github.com/hlagunes01-bot) | Product Strategy & Domain Specifications |
-
-### Special Acknowledgments
-* **Design Inspiration:** Shakuro "ACRU" Web Dashboard UI/UX Design System.
-* **Clinical Data Resources:** MTSamples & Synthetic Payer Formulary Specifications.
-
----
-*CoverageGuard — Protecting Healthcare Providers from Avoidable Claims Denials.*
+Built for **CalHacks 13.0** (UC Berkeley).
+* **Bilal Hasan** ([@bhasan26](https://github.com/bhasan26))
+* **H. Lagunes** ([@hlagunes01](https://github.com/hlagunes01))

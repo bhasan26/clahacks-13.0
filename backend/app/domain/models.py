@@ -1,6 +1,10 @@
 """
-Contract-first Pydantic domain models for CoverageGuard.
-Matches the project contract defined in project.md / Appendix A.
+Domain models for CoverageGuard.
+Matches the specification:
+- Statuses: Approved, Needs attention, Missing or wrong info
+- Items results: Covered, Not covered, Prior approval needed, Document missing, Value wrong, No rule found
+- 5 Specialties: Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology
+- 40 Cases, 6 Updates
 """
 
 from datetime import date, datetime, timezone
@@ -17,8 +21,8 @@ class RuleCategory(str, Enum):
     DRUG = "drug"
     PROCEDURE = "procedure"
     SERVICE = "service"
-    REQUIRED_DOCUMENT = "required_document"
-    PRIOR_APPROVAL = "prior_approval"
+    REQUIRED_DOCUMENT = "document"
+    PRIOR_APPROVAL = "approval"
 
 
 class RuleEffect(str, Enum):
@@ -70,98 +74,81 @@ class CaseItem(BaseModel):
     quantity: Optional[int] = 1
 
 
+# Standard plain status strings:
+# "Approved" | "Needs attention" | "Missing or wrong info"
+CaseStatusType = Literal["Approved", "Needs attention", "Missing or wrong info"]
+
+
 class Case(BaseModel):
     case_id: str
-    insurer_id: str
-    plan_id: str
+    insurer_id: str = "demo-insurer"
+    insurer_name: Optional[str] = "Demo Insurance Co."
+    plan_id: str = "PLAN-GOLD"
     member_ref: str
+    group_number: Optional[str] = None
+    specialty: str = "Cardiology"  # Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology
     service_date: date
-    visit_type: str = "outpatient"  # "outpatient" | "inpatient" | "emergency"
+    visit_type: str = "outpatient"
     diagnoses: List[Diagnosis] = Field(default_factory=list)
     items: List[CaseItem] = Field(default_factory=list)
     documents: List[str] = Field(default_factory=list)
     prior_approval_ref: Optional[str] = None
-    status: Literal["open", "submitted", "closed"] = "open"
-    officer_id: Optional[str] = "officer-1"
+    status: CaseStatusType = "Approved"
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
 
-class VerdictType(str, Enum):
-    COVERED = "covered"
-    EXCLUDED = "excluded"
-    PRIOR_APPROVAL_NEEDED = "prior_approval_needed"
-    DOCUMENTS_MISSING = "documents_missing"
-    NO_RULE_FOUND = "no_rule_found"
-    CANNOT_ASSESS = "cannot_assess"
-
-
-class SeverityType(str, Enum):
-    CLEAR = "clear"
-    ACTION_NEEDED = "action_needed"
-    VERIFY = "verify"
-    INFO = "info"
+# Standard item-level results:
+# Covered, Not covered, Prior approval needed, Document missing, Value wrong
+ItemResultType = Literal[
+    "Covered",
+    "Not covered",
+    "Prior approval needed",
+    "Document missing",
+    "Value wrong",
+    "No rule found, verify with the insurer",
+]
 
 
 class ItemVerdict(BaseModel):
     item: CaseItem
-    verdict: VerdictType
-    severity: SeverityType
+    result: ItemResultType
     rule_id: Optional[str] = None
     rule_version: Optional[int] = None
-    effective_from: Optional[date] = None
-    source_ref: Optional[str] = None
-    explanation: str
-    suggested_officer_action: Optional[str] = None
-
-
-class CaseOverallStatus(str, Enum):
-    CLEAR = "clear"
-    NEEDS_ATTENTION = "needs_attention"
-    CANNOT_ASSESS = "cannot_assess"
+    effective_date: Optional[str] = None
+    plain_sentence: str  # "Drug X is not covered from 1 Nov 2026."
+    rule_reference: str  # "Rule R-1042."
+    what_to_do: str      # "Review with the physician before submitting."
+    full_issue_text: str # Plain single sentence combining statement, rule reference, and action
 
 
 class CaseCheckResult(BaseModel):
     case_id: str
-    governing_date: date
-    overall_status: CaseOverallStatus
+    specialty: str
+    status: CaseStatusType
+    items_count: int
     results: List[ItemVerdict]
     checked_at: datetime = Field(default_factory=utc_now)
 
 
-class AlertChange(BaseModel):
-    from_version: Optional[int] = None
-    to_version: int
-    change_type: Optional[str] = None
-    details: Optional[str] = None
-
-
-class AlertStatus(str, Enum):
-    OPEN = "open"
-    SUPERSEDED = "superseded"
-    CLOSED = "closed"
-
-
-class Alert(BaseModel):
-    alert_id: str
-    case_id: str
-    item_code: str
+class InsurerUpdateEntry(BaseModel):
+    update_id: str
+    headline: str
+    item_type: Literal["drug", "procedure", "document", "approval"]
+    effective_date: str
+    status: Literal["Announced", "Effective", "Delayed", "Cancelled"]
+    affected_cases_count: int
+    affected_case_ids: List[str] = Field(default_factory=list)
     rule_id: str
-    change: AlertChange
-    status: AlertStatus = AlertStatus.OPEN
-    supersedes: Optional[str] = None
-    closed_reason: Optional[str] = None
-    created_at: datetime = Field(default_factory=utc_now)
-    headline: Optional[str] = None
-    explanation: Optional[str] = None
-    suggested_action: Optional[str] = None
-    acknowledged: bool = False
-    officer_note: Optional[str] = None
-
-
-class InsurerChangeEvent(BaseModel):
-    event_id: str
+    rule_version: int
     published_at: datetime = Field(default_factory=utc_now)
-    change_type: Literal["added", "modified", "status_changed", "delayed", "cancelled"]
-    rule: Rule
-    previous: Optional[Dict[str, Any]] = None
+
+
+class InsurerConnectionInfo(BaseModel):
+    insurer_name: str = "Demo Insurance Co."
+    status: str = "Connected"
+    access_status: str = "Access active"
+    read_only: bool = True  # "Read-only" appears only in the popover
+    last_check_time: str = "06:00 today"
+    is_check_failed: bool = False
+    warning_banner: Optional[str] = None

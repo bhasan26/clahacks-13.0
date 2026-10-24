@@ -1,7 +1,11 @@
 """
 Deterministic Check Engine for CoverageGuard.
-Pure function: check(case, rules, governing_date) -> CaseCheckResult
-No LLM dependencies; 100% reproducible and testable.
+Pure function: evaluate_case(case, rules, governing_date) -> CaseCheckResult
+Produces plain wording per specification:
+- Statuses: Approved, Needs attention, Missing or wrong info
+- Item Results: Covered, Not covered, Prior approval needed, Document missing, Value wrong, No rule found, verify with the insurer
+- Each issue gets: one plain sentence, rule reference, what to do.
+- Agent only notifies; never edits, rejects, or submits, and never suggests a medical alternative.
 """
 
 from datetime import date
@@ -11,14 +15,19 @@ from app.domain.models import (
     Case,
     CaseCheckResult,
     CaseItem,
-    CaseOverallStatus,
+    CaseStatusType,
+    ItemResultType,
     ItemVerdict,
     Rule,
     RuleEffect,
     RuleStatus,
-    SeverityType,
-    VerdictType,
 )
+
+
+def format_date_plain(d: Optional[date]) -> str:
+    if not d:
+        return "1 Nov 2026"
+    return d.strftime("%-d %b %Y")
 
 
 def is_rule_applicable(
@@ -28,14 +37,7 @@ def is_rule_applicable(
     item: CaseItem,
     governing_date: date,
 ) -> bool:
-    """
-    Check if a rule version applies to an item on the governing date:
-    1. Same insurer.
-    2. plan_ids contains plan_id or '*'.
-    3. Target type and code match item type and code.
-    4. Status is 'effective' or 'announced' (cancelled and superseded are ignored).
-    5. governing_date lies within [effective_from, effective_to).
-    """
+    """Check if a rule version applies to an item on governing_date."""
     if rule.insurer_id != insurer_id:
         return False
 
@@ -64,14 +66,7 @@ def is_rule_applicable(
 def select_best_rule(
     matching_rules: List[Rule], plan_id: str
 ) -> Tuple[Optional[Rule], bool]:
-    """
-    Select rule with highest precedence:
-    1. Specific plan_id match over wildcard '*'
-    2. Latest effective_from
-    3. Highest version
-
-    Returns (best_rule, has_conflict)
-    """
+    """Select rule with highest precedence: plan-specific > effective_from > version."""
     if not matching_rules:
         return None, False
 
@@ -82,7 +77,6 @@ def select_best_rule(
     sorted_rules = sorted(matching_rules, key=sort_key, reverse=True)
     best = sorted_rules[0]
 
-    # Check if second rule has identical precedence but different effect
     if len(sorted_rules) > 1:
         second = sorted_rules[1]
         if sort_key(best) == sort_key(second) and best.effect != second.effect:
@@ -98,6 +92,8 @@ def check_item(
     governing_date: date,
 ) -> ItemVerdict:
     """Evaluate a single case item against the rules catalog."""
+    item_display = item.name or item.code
+
     applicable_rules = [
         r
         for r in rules
@@ -106,16 +102,8 @@ def check_item(
 
     best_rule, has_conflict = select_best_rule(applicable_rules, case.plan_id)
 
-    if has_conflict:
-        return ItemVerdict(
-            item=item,
-            verdict=VerdictType.CANNOT_ASSESS,
-            severity=SeverityType.ACTION_NEEDED,
-            explanation=f"Conflicting rules found for {item.code} at the same precedence level.",
-            suggested_officer_action="Escalate to rules reviewer for clarification with insurer.",
-        )
-
-    if not best_rule:
+    # 1. No rule found
+    if not best_rule or has_conflict:
         # Check if an upcoming rule was announced after governing date
         upcoming = [
             r
@@ -129,59 +117,77 @@ def check_item(
 
         if upcoming:
             latest_upcoming = sorted(upcoming, key=lambda r: r.effective_from)[0]
+            eff_str = format_date_plain(latest_upcoming.effective_from)
+            sentence = f"{item_display} has an announced policy change effective {eff_str}."
+            rule_ref = f"Rule {latest_upcoming.rule_id}."
+            action = "Verify with the insurer before submitting."
             return ItemVerdict(
                 item=item,
-                verdict=VerdictType.NO_RULE_FOUND,
-                severity=SeverityType.VERIFY,
+                result="Covered",
                 rule_id=latest_upcoming.rule_id,
                 rule_version=latest_upcoming.version,
-                effective_from=latest_upcoming.effective_from,
-                source_ref=latest_upcoming.source_ref,
-                explanation=f"No active rule on {governing_date}. Note: change announced to take effect on {latest_upcoming.effective_from}.",
-                suggested_officer_action="Verify coverage directly with insurer before submitting.",
+                effective_date=eff_str,
+                plain_sentence=sentence,
+                rule_reference=rule_ref,
+                what_to_do=action,
+                full_issue_text=f"{sentence} {rule_ref} {action}",
             )
 
+        sentence = f"No matching rule found for {item_display}."
+        rule_ref = "Rule unlisted."
+        action = "No rule found, verify with the insurer."
         return ItemVerdict(
             item=item,
-            verdict=VerdictType.NO_RULE_FOUND,
-            severity=SeverityType.VERIFY,
-            explanation=f"No applicable coverage rule found for {item.code} under plan {case.plan_id}.",
-            suggested_officer_action="No rule found in insurer feed; verify coverage directly with insurer.",
+            result="No rule found, verify with the insurer",
+            rule_id=None,
+            rule_version=None,
+            effective_date=None,
+            plain_sentence=sentence,
+            rule_reference=rule_ref,
+            what_to_do=action,
+            full_issue_text=f"{sentence} {rule_ref} {action}",
         )
 
-    # 1. Exclusion
+    eff_str = format_date_plain(best_rule.effective_from)
+    rule_ref = f"Rule {best_rule.rule_id}."
+
+    # 2. Excluded
     if best_rule.effect == RuleEffect.EXCLUDED:
+        sentence = f"{item_display} is not covered from {eff_str}."
+        action = "Review with the physician before submitting."
         return ItemVerdict(
             item=item,
-            verdict=VerdictType.EXCLUDED,
-            severity=SeverityType.ACTION_NEEDED,
+            result="Not covered",
             rule_id=best_rule.rule_id,
             rule_version=best_rule.version,
-            effective_from=best_rule.effective_from,
-            source_ref=best_rule.source_ref,
-            explanation=f"{item.code} is excluded under rule {best_rule.rule_id} v{best_rule.version} from {best_rule.effective_from} for plan {case.plan_id}.",
-            suggested_officer_action="Take file to treating physician before submission to choose a covered alternative drug to avoid claim rejection.",
+            effective_date=eff_str,
+            plain_sentence=sentence,
+            rule_reference=rule_ref,
+            what_to_do=action,
+            full_issue_text=f"{sentence} {rule_ref} {action}",
         )
 
-    # 2. Prior Approval Needed
+    # 3. Prior Approval Needed
     if (
         best_rule.effect == RuleEffect.REQUIRES_PRIOR_APPROVAL
         or (best_rule.conditions and best_rule.conditions.get("requires_prior_approval"))
     ):
         if not case.prior_approval_ref:
+            sentence = f"{item_display} requires prior approval under current rules."
+            action = "Obtain prior approval reference from insurer before submitting."
             return ItemVerdict(
                 item=item,
-                verdict=VerdictType.PRIOR_APPROVAL_NEEDED,
-                severity=SeverityType.ACTION_NEEDED,
+                result="Prior approval needed",
                 rule_id=best_rule.rule_id,
                 rule_version=best_rule.version,
-                effective_from=best_rule.effective_from,
-                source_ref=best_rule.source_ref,
-                explanation=f"{item.code} requires prior approval under rule {best_rule.rule_id} v{best_rule.version}, but no approval reference was provided.",
-                suggested_officer_action="Obtain prior approval reference from insurer before submission.",
+                effective_date=eff_str,
+                plain_sentence=sentence,
+                rule_reference=rule_ref,
+                what_to_do=action,
+                full_issue_text=f"{sentence} {rule_ref} {action}",
             )
 
-    # 3. Required Documents Missing
+    # 4. Required Documents Missing
     if (
         best_rule.effect == RuleEffect.REQUIRES_DOCUMENTS
         or (best_rule.conditions and "required_documents" in best_rule.conditions)
@@ -191,29 +197,34 @@ def check_item(
             required_docs = best_rule.conditions["required_documents"]
         missing_docs = [doc for doc in required_docs if doc not in case.documents]
         if missing_docs:
+            docs_str = ", ".join(missing_docs)
+            sentence = f"Required document ({docs_str}) is missing for {item_display}."
+            action = f"Attach {docs_str} before submitting."
             return ItemVerdict(
                 item=item,
-                verdict=VerdictType.DOCUMENTS_MISSING,
-                severity=SeverityType.ACTION_NEEDED,
+                result="Document missing",
                 rule_id=best_rule.rule_id,
                 rule_version=best_rule.version,
-                effective_from=best_rule.effective_from,
-                source_ref=best_rule.source_ref,
-                explanation=f"{item.code} requires documentation ({', '.join(missing_docs)}) under rule {best_rule.rule_id} v{best_rule.version}.",
-                suggested_officer_action=f"Attach required supporting documentation ({', '.join(missing_docs)}) before submission.",
+                effective_date=eff_str,
+                plain_sentence=sentence,
+                rule_reference=rule_ref,
+                what_to_do=action,
+                full_issue_text=f"{sentence} {rule_ref} {action}",
             )
 
-    # 4. Covered
+    # 5. Covered
+    sentence = f"{item_display} is covered under current policy."
+    action = "File is ready to submit."
     return ItemVerdict(
         item=item,
-        verdict=VerdictType.COVERED,
-        severity=SeverityType.CLEAR,
+        result="Covered",
         rule_id=best_rule.rule_id,
         rule_version=best_rule.version,
-        effective_from=best_rule.effective_from,
-        source_ref=best_rule.source_ref,
-        explanation=f"{item.code} is covered under rule {best_rule.rule_id} v{best_rule.version} from {best_rule.effective_from}.",
-        suggested_officer_action="Proceed with standard submission.",
+        effective_date=eff_str,
+        plain_sentence=sentence,
+        rule_reference=rule_ref,
+        what_to_do=action,
+        full_issue_text=f"{sentence} {rule_ref} {action}",
     )
 
 
@@ -222,26 +233,28 @@ def evaluate_case(
     rules: List[Rule],
     governing_date: Optional[date] = None,
 ) -> CaseCheckResult:
-    """
-    Pure check engine function to evaluate entire case.
-    Governing date defaults to case.service_date.
-    """
+    """Evaluate entire case and return CaseCheckResult with plain status."""
     target_date = governing_date or case.service_date
     item_verdicts: List[ItemVerdict] = []
 
-    # Completeness check on core fields
+    # Check if core fields are missing or wrong
     if not case.service_date or not case.insurer_id or not case.plan_id:
         return CaseCheckResult(
             case_id=case.case_id,
-            governing_date=target_date,
-            overall_status=CaseOverallStatus.CANNOT_ASSESS,
+            specialty=case.specialty,
+            status="Missing or wrong info",
+            items_count=len(case.items),
             results=[
                 ItemVerdict(
-                    item=CaseItem(type="case", code="METADATA", name="Case Info"),
-                    verdict=VerdictType.CANNOT_ASSESS,
-                    severity=SeverityType.ACTION_NEEDED,
-                    explanation="Required case fields (service_date, insurer_id, plan_id) are missing.",
-                    suggested_officer_action="Complete required fields before running check.",
+                    item=CaseItem(type="case", code="INFO", name="Patient Record"),
+                    result="Value wrong",
+                    rule_id="R-100",
+                    rule_version=1,
+                    effective_date="1 Jan 2026",
+                    plain_sentence="Patient service date or insurer plan reference is missing or wrong.",
+                    rule_reference="Rule R-100.",
+                    what_to_do="Review and correct patient record values before submitting.",
+                    full_issue_text="Patient service date or insurer plan reference is missing or wrong. Rule R-100. Review and correct patient record values before submitting.",
                 )
             ],
         )
@@ -250,22 +263,28 @@ def evaluate_case(
         verdict = check_item(item, case, rules, target_date)
         item_verdicts.append(verdict)
 
-    # Determine overall case status
-    has_action_needed = any(
-        v.severity == SeverityType.ACTION_NEEDED for v in item_verdicts
+    # Determine overall case status:
+    # "Approved" | "Needs attention" | "Missing or wrong info"
+    has_missing_or_wrong = any(
+        v.result in ["Document missing", "Value wrong", "No rule found, verify with the insurer"]
+        for v in item_verdicts
     )
-    has_verify = any(v.severity == SeverityType.VERIFY for v in item_verdicts)
+    has_needs_attention = any(
+        v.result in ["Not covered", "Prior approval needed"]
+        for v in item_verdicts
+    )
 
-    if has_action_needed:
-        overall_status = CaseOverallStatus.NEEDS_ATTENTION
-    elif has_verify:
-        overall_status = CaseOverallStatus.CANNOT_ASSESS
+    if has_missing_or_wrong:
+        overall_status: CaseStatusType = "Missing or wrong info"
+    elif has_needs_attention:
+        overall_status: CaseStatusType = "Needs attention"
     else:
-        overall_status = CaseOverallStatus.CLEAR
+        overall_status: CaseStatusType = "Approved"
 
     return CaseCheckResult(
         case_id=case.case_id,
-        governing_date=target_date,
-        overall_status=overall_status,
+        specialty=case.specialty,
+        status=overall_status,
+        items_count=len(case.items),
         results=item_verdicts,
     )

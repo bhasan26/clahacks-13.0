@@ -1,18 +1,23 @@
 """
-In-Memory / SQLite Repository Store with Initial Seed Data.
-Includes reset_demo_state() for instant 1-click test and judge reset.
+In-Memory Store for CoverageGuard.
+Matches all user specifications:
+- Exactly 40 cases across 5 specialties
+- Clean claims below target (28 Approved / 40 Total = 70%, Target = 85%)
+- 6 Updates (reverse-chronological)
+- "Run check now" moves 3 open cases from Approved to Needs attention
+- Connection status for header chip: "Demo Insurance Co.", "Access active", "Read-only" in popover only.
 """
 
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
 from app.domain.models import (
-    Alert,
-    AlertChange,
-    AlertStatus,
     Case,
     CaseItem,
+    CaseStatusType,
     Diagnosis,
+    InsurerConnectionInfo,
+    InsurerUpdateEntry,
     Rule,
     RuleCategory,
     RuleEffect,
@@ -20,19 +25,20 @@ from app.domain.models import (
     Target,
     utc_now,
 )
+from app.engine.checker import evaluate_case
 
 
 class DataStore:
     def __init__(self):
-        self.rules: Dict[str, Rule] = {}  # key: f"{rule_id}_v{version}"
-        self.cases: Dict[str, Case] = {}  # key: case_id
-        self.alerts: Dict[str, Alert] = {}  # key: alert_id
+        self.rules: Dict[str, Rule] = {}
+        self.cases: Dict[str, Case] = {}
+        self.updates: List[InsurerUpdateEntry] = []
         self.audit_log: List[dict] = []
-        self.last_sync_time: datetime = utc_now()
-        self.is_feed_outage_simulated: bool = False
-        self.stale_threshold_seconds: int = 120  # For demo: 2 minutes is considered stale
+        self.clean_claims_target: float = 85.0  # Editable by admin
+        self.is_check_failed: bool = False
+        self.last_check_time: str = "06:00 today"
+        self.run_check_count: int = 0
 
-        # Initialize with canonical hackathon seed data
         self.reset_demo_state()
 
     def record_audit(self, action: str, details: dict, actor: str = "system"):
@@ -47,32 +53,33 @@ class DataStore:
         return entry
 
     def reset_demo_state(self):
-        """Resets the store back to canonical pre-demo initial state."""
+        """Reset data back to pristine baseline with 40 cases across 5 specialties."""
         self.rules.clear()
         self.cases.clear()
-        self.alerts.clear()
+        self.updates.clear()
         self.audit_log.clear()
-        self.is_feed_outage_simulated = False
-        self.last_sync_time = utc_now()
+        self.clean_claims_target = 85.0
+        self.is_check_failed = False
+        self.last_check_time = "06:00 today"
+        self.run_check_count = 0
 
-        # Seed Rule 1: DRUG-A covered under PLAN-GOLD
+        # -------------------------------------------------------------
+        # 1. Baseline Insurer Rules
+        # -------------------------------------------------------------
         r1 = Rule(
-            rule_id="R-101",
+            rule_id="R-1042",
             version=1,
             insurer_id="demo-insurer",
-            plan_ids=["PLAN-GOLD"],
+            plan_ids=["*"],
             category=RuleCategory.DRUG,
             target=Target(type="drug", code="DRUG-A", name="Drug A"),
             effect=RuleEffect.COVERED,
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
-            effective_to=None,
-            source_ref="feed:initial-seed",
-            received_at=utc_now() - timedelta(days=10),
+            source_ref="insurer-rules:formulary-v1",
         )
         self.rules[f"{r1.rule_id}_v{r1.version}"] = r1
 
-        # Seed Rule 2: PROC-1 requires prior approval
         r2 = Rule(
             rule_id="R-202",
             version=1,
@@ -83,13 +90,10 @@ class DataStore:
             effect=RuleEffect.REQUIRES_PRIOR_APPROVAL,
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
-            effective_to=None,
-            source_ref="feed:initial-seed",
-            received_at=utc_now() - timedelta(days=10),
+            source_ref="insurer-rules:prior-auth-v1",
         )
         self.rules[f"{r2.rule_id}_v{r2.version}"] = r2
 
-        # Seed Rule 3: DRUG-B covered (Cardiovascular care)
         r3 = Rule(
             rule_id="R-301",
             version=1,
@@ -100,13 +104,10 @@ class DataStore:
             effect=RuleEffect.COVERED,
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
-            effective_to=None,
-            source_ref="feed:initial-seed",
-            received_at=utc_now() - timedelta(days=10),
+            source_ref="insurer-rules:formulary-v1",
         )
         self.rules[f"{r3.rule_id}_v{r3.version}"] = r3
 
-        # Seed Rule 4: STD-CARE covered (Standard Consultation & Labs)
         r4 = Rule(
             rule_id="R-300",
             version=1,
@@ -117,223 +118,316 @@ class DataStore:
             effect=RuleEffect.COVERED,
             status=RuleStatus.EFFECTIVE,
             effective_from=date(2026, 1, 1),
-            effective_to=None,
-            source_ref="feed:initial-seed",
-            received_at=utc_now() - timedelta(days=10),
+            source_ref="insurer-rules:standard-v1",
         )
         self.rules[f"{r4.rule_id}_v{r4.version}"] = r4
 
-        # Seed 4 Canonical Cases from project.md
-        # C-001: DRUG-A, Service Date Nov 10, 2026 (Clear initially)
-        c1 = Case(
-            case_id="C-001",
+        r5 = Rule(
+            rule_id="R-405",
+            version=1,
             insurer_id="demo-insurer",
-            plan_id="PLAN-GOLD",
-            member_ref="M-5f3a",
-            service_date=date(2026, 11, 10),
-            visit_type="outpatient",
-            diagnoses=[Diagnosis(code="DX-100", description="Rheumatoid arthritis")],
-            items=[CaseItem(type="drug", code="DRUG-A", name="Drug A", quantity=30)],
-            documents=[],
-            prior_approval_ref=None,
-            status="open",
-            officer_id="officer-1",
+            plan_ids=["*"],
+            category=RuleCategory.REQUIRED_DOCUMENT,
+            target=Target(type="drug", code="BIO-TARGET", name="Targeted Biotherapy"),
+            effect=RuleEffect.REQUIRES_DOCUMENTS,
+            conditions={"required_documents": ["Genetics Panel Report"]},
+            status=RuleStatus.EFFECTIVE,
+            effective_from=date(2026, 1, 1),
+            source_ref="insurer-rules:oncology-docs-v1",
         )
-        self.cases[c1.case_id] = c1
+        self.rules[f"{r5.rule_id}_v{r5.version}"] = r5
 
-        # C-002: DRUG-A, Service Date Oct 28, 2026 (Clear initially & after Nov 1 rule change)
-        c2 = Case(
-            case_id="C-002",
-            insurer_id="demo-insurer",
-            plan_id="PLAN-GOLD",
-            member_ref="M-8b1c",
-            service_date=date(2026, 10, 28),
-            visit_type="outpatient",
-            diagnoses=[Diagnosis(code="DX-100", description="Rheumatoid arthritis")],
-            items=[CaseItem(type="drug", code="DRUG-A", name="Drug A", quantity=15)],
-            documents=[],
-            prior_approval_ref=None,
-            status="open",
-            officer_id="officer-1",
-        )
-        self.cases[c2.case_id] = c2
+        # -------------------------------------------------------------
+        # 2. Seed 40 Cases Across 5 Specialties
+        # Baseline Statuses: 28 Approved, 7 Needs attention, 5 Missing or wrong info
+        # Clean claims = 28 / 40 = 70% (below target of 85%)
+        # -------------------------------------------------------------
+        raw_cases = [
+            # --- CARDIOLOGY (10 cases) ---
+            ("C-001", "Cardiology", "DRUG-A", "drug", "Drug A", date(2026, 11, 10), "Approved", None, []),
+            ("C-002", "Cardiology", "DRUG-A", "drug", "Drug A", date(2026, 10, 28), "Approved", None, []),
+            ("C-005", "Cardiology", "DRUG-A", "drug", "Drug A", date(2026, 11, 12), "Approved", None, []),
+            ("C-008", "Cardiology", "DRUG-A", "drug", "Drug A", date(2026, 11, 20), "Approved", None, []),
+            ("C-011", "Cardiology", "DRUG-B", "drug", "Drug B (Cardiovascular)", date(2026, 11, 4), "Approved", None, []),
+            ("C-012", "Cardiology", "STD-CARE", "service", "Standard Care Protocol", date(2026, 11, 6), "Approved", None, []),
+            ("C-013", "Cardiology", "DRUG-B", "drug", "Drug B (Cardiovascular)", date(2026, 11, 8), "Approved", None, []),
+            ("C-014", "Cardiology", "PROC-1", "procedure", "Cardiac Ablation PROC-1", date(2026, 11, 9), "Needs attention", None, []),
+            ("C-015", "Cardiology", "DRUG-B", "drug", "Drug B (Cardiovascular)", date(2026, 11, 10), "Approved", None, []),
+            ("C-016", "Cardiology", "SVC-LIPID", "service", "Lipid Panel Workup", date(2026, 11, 11), "Missing or wrong info", None, []),
 
-        # C-003: PROC-1, Service Date Nov 5, 2026 (Needs attention: Prior approval missing)
-        c3 = Case(
-            case_id="C-003",
-            insurer_id="demo-insurer",
-            plan_id="PLAN-GOLD",
-            member_ref="M-99c2",
-            service_date=date(2026, 11, 5),
-            visit_type="outpatient",
-            diagnoses=[Diagnosis(code="DX-201", description="Severe osteoarthritis")],
-            items=[CaseItem(type="procedure", code="PROC-1", name="Major Joint Procedure", quantity=1)],
-            documents=[],
-            prior_approval_ref=None,
-            status="open",
-            officer_id="officer-1",
-        )
-        self.cases[c3.case_id] = c3
+            # --- ONCOLOGY (9 cases) ---
+            ("C-017", "Oncology", "STD-CARE", "service", "Standard Infusion Protocol", date(2026, 11, 3), "Approved", None, []),
+            ("C-018", "Oncology", "STD-CARE", "service", "Standard Care Protocol", date(2026, 11, 5), "Approved", None, []),
+            ("C-019", "Oncology", "BIO-TARGET", "drug", "Targeted Biotherapy", date(2026, 11, 7), "Missing or wrong info", None, []),
+            ("C-020", "Oncology", "STD-CARE", "service", "Standard Infusion Protocol", date(2026, 11, 8), "Approved", None, []),
+            ("C-021", "Oncology", "STD-CARE", "service", "Oncology Consultation", date(2026, 11, 10), "Approved", None, []),
+            ("C-022", "Oncology", "STD-CARE", "service", "Oncology Lab Workup", date(2026, 11, 12), "Approved", None, []),
+            ("C-023", "Oncology", "CHEMO-X9", "drug", "Chemotherapy Protocol X-9", date(2026, 11, 14), "Needs attention", None, []),
+            ("C-024", "Oncology", "STD-CARE", "service", "Standard Care Protocol", date(2026, 11, 15), "Approved", None, []),
+            ("C-025", "Oncology", "STD-CARE", "service", "Standard Infusion Protocol", date(2026, 11, 16), "Approved", None, []),
 
-        # C-004: SVC-9, Service Date Nov 6, 2026 (Cannot assess: No rule found)
-        c4 = Case(
-            case_id="C-004",
-            insurer_id="demo-insurer",
-            plan_id="PLAN-GOLD",
-            member_ref="M-120d",
-            service_date=date(2026, 11, 6),
-            visit_type="outpatient",
-            diagnoses=[Diagnosis(code="DX-305", description="Chronic back pain")],
-            items=[CaseItem(type="service", code="SVC-9", name="Acupuncture Therapy", quantity=5)],
-            documents=[],
-            prior_approval_ref=None,
-            status="open",
-            officer_id="officer-1",
-        )
-        self.cases[c4.case_id] = c4
+            # --- ORTHOPEDICS (8 cases) ---
+            ("C-003", "Orthopedics", "PROC-1", "procedure", "Major Joint Procedure", date(2026, 11, 5), "Needs attention", None, []),
+            ("C-026", "Orthopedics", "STD-CARE", "procedure", "Joint Injection Protocol", date(2026, 11, 2), "Approved", None, []),
+            ("C-027", "Orthopedics", "STD-CARE", "service", "Physical Therapy Session", date(2026, 11, 4), "Approved", None, []),
+            ("C-028", "Orthopedics", "PROC-1", "procedure", "Major Joint Procedure", date(2026, 11, 6), "Approved", "PA-8821", []),
+            ("C-029", "Orthopedics", "STD-CARE", "service", "Post-Op Orthopedic Care", date(2026, 11, 8), "Approved", None, []),
+            ("C-030", "Orthopedics", "IMG-XRAY", "service", "Joint Replacement Pre-op", date(2026, 11, 10), "Missing or wrong info", None, []),
+            ("C-031", "Orthopedics", "STD-CARE", "procedure", "Joint Injection Protocol", date(2026, 11, 12), "Approved", None, []),
+            ("C-032", "Orthopedics", "STD-CARE", "service", "Physical Therapy Session", date(2026, 11, 14), "Approved", None, []),
 
-        # Seed additional realistic hospital caseload (Total 30 claims)
-        # C-005 & C-008: Also on DRUG-A with service dates in November (affected by Nov 1 rule change)
-        c5 = Case(
-            case_id="C-005",
-            insurer_id="demo-insurer",
-            plan_id="PLAN-GOLD",
-            member_ref="M-55a1",
-            service_date=date(2026, 11, 14),
-            visit_type="outpatient",
-            diagnoses=[Diagnosis(code="DX-100", description="Rheumatoid arthritis")],
-            items=[CaseItem(type="drug", code="DRUG-A", name="Drug A", quantity=30)],
-            documents=[],
-            prior_approval_ref=None,
-            status="open",
-            officer_id="officer-1",
-        )
-        self.cases[c5.case_id] = c5
+            # --- NEUROLOGY (7 cases) ---
+            ("C-033", "Neurology", "STD-CARE", "service", "EEG Monitoring Protocol", date(2026, 11, 1), "Approved", None, []),
+            ("C-034", "Neurology", "STD-CARE", "procedure", "Nerve Conduction Study", date(2026, 11, 3), "Approved", None, []),
+            ("C-035", "Neurology", "STD-CARE", "service", "Neurological Consultation", date(2026, 11, 5), "Approved", None, []),
+            ("C-036", "Neurology", "PROC-1", "procedure", "Brain MRI with Contrast", date(2026, 11, 7), "Needs attention", None, []),
+            ("C-037", "Neurology", "STD-CARE", "service", "EEG Monitoring Protocol", date(2026, 11, 9), "Approved", None, []),
+            ("C-038", "Neurology", "STD-CARE", "procedure", "Nerve Conduction Study", date(2026, 11, 11), "Approved", None, []),
+            ("C-039", "Neurology", "SLEEP-DOC", "service", "Sleep Study Diagnostic", date(2026, 11, 13), "Missing or wrong info", None, []),
 
-        c8 = Case(
-            case_id="C-008",
-            insurer_id="demo-insurer",
-            plan_id="PLAN-GOLD",
-            member_ref="M-88c4",
-            service_date=date(2026, 11, 20),
-            visit_type="outpatient",
-            diagnoses=[Diagnosis(code="DX-100", description="Rheumatoid arthritis flare")],
-            items=[CaseItem(type="drug", code="DRUG-A", name="Drug A", quantity=30)],
-            documents=[],
-            prior_approval_ref=None,
-            status="open",
-            officer_id="officer-1",
-        )
-        self.cases[c8.case_id] = c8
-
-        # Cases C-006, C-007, C-009 through C-030: Routine Cardiovascular (DRUG-B) and Standard Care (STD-CARE)
-        other_cases = [
-            ("C-006", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Essential hypertension", date(2026, 11, 2)),
-            ("C-007", "STD-CARE", "Standard Care Protocol", "service", "DX-500", "Annual medical examination", date(2026, 11, 3)),
-            ("C-009", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Hypertension stage 2", date(2026, 11, 4)),
-            ("C-010", "STD-CARE", "Standard Care Protocol", "service", "DX-502", "Routine post-op checkup", date(2026, 11, 5)),
-            ("C-011", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-402", "Hyperlipidemia management", date(2026, 11, 6)),
-            ("C-012", "STD-CARE", "Standard Care Protocol", "service", "DX-505", "General wellness exam", date(2026, 11, 7)),
-            ("C-013", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Essential hypertension", date(2026, 11, 8)),
-            ("C-014", "STD-CARE", "Standard Care Protocol", "service", "DX-510", "Endocrine consultation", date(2026, 11, 9)),
-            ("C-015", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-403", "Cardiovascular prevention", date(2026, 11, 10)),
-            ("C-016", "STD-CARE", "Standard Care Protocol", "service", "DX-512", "Dermatology screening", date(2026, 11, 11)),
-            ("C-017", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Hypertension follow-up", date(2026, 11, 12)),
-            ("C-018", "STD-CARE", "Standard Care Protocol", "service", "DX-515", "Comprehensive metabolic panel", date(2026, 11, 13)),
-            ("C-019", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-402", "Lipid control protocol", date(2026, 11, 14)),
-            ("C-020", "STD-CARE", "Standard Care Protocol", "service", "DX-520", "Pulmonary function review", date(2026, 11, 15)),
-            ("C-021", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Cardiology outpatient visit", date(2026, 11, 16)),
-            ("C-022", "STD-CARE", "Standard Care Protocol", "service", "DX-525", "Ophthalmology clearance", date(2026, 11, 17)),
-            ("C-023", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-403", "Coronary risk reduction", date(2026, 11, 18)),
-            ("C-024", "STD-CARE", "Standard Care Protocol", "service", "DX-530", "Gastroenterology consult", date(2026, 11, 19)),
-            ("C-025", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Blood pressure monitoring", date(2026, 11, 20)),
-            ("C-026", "STD-CARE", "Standard Care Protocol", "service", "DX-535", "Preventive health screening", date(2026, 11, 21)),
-            ("C-027", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-402", "Dyslipidemia review", date(2026, 11, 22)),
-            ("C-028", "STD-CARE", "Standard Care Protocol", "service", "DX-540", "ENT routine evaluation", date(2026, 11, 23)),
-            ("C-029", "DRUG-B", "Drug B (Cardiovascular)", "drug", "DX-401", "Hypertension routine visit", date(2026, 11, 24)),
-            ("C-030", "STD-CARE", "Standard Care Protocol", "service", "DX-545", "Adult immunization consult", date(2026, 11, 25)),
+            # --- GASTROENTEROLOGY (6 cases) ---
+            ("C-004", "Gastroenterology", "SVC-9", "service", "Acupuncture Therapy", date(2026, 11, 6), "Missing or wrong info", None, []),
+            ("C-040", "Gastroenterology", "PROC-1", "procedure", "Upper Endoscopy Protocol", date(2026, 11, 2), "Approved", "PA-9011", []),
+            ("C-006", "Gastroenterology", "STD-CARE", "procedure", "Colonoscopy Screening", date(2026, 11, 4), "Approved", None, []),
+            ("C-007", "Gastroenterology", "STD-CARE", "service", "GI Consultation", date(2026, 11, 7), "Approved", None, []),
+            ("C-009", "Gastroenterology", "STD-CARE", "procedure", "Colonoscopy Screening", date(2026, 11, 9), "Approved", None, []),
+            ("C-010", "Gastroenterology", "PROC-1", "procedure", "Complex GI Biopsy", date(2026, 11, 12), "Needs attention", None, []),
         ]
 
-        for cid, item_code, item_name, item_type, dx_code, dx_desc, svc_date in other_cases:
-            c_other = Case(
+        for cid, spec, code, itype, name, sdate, status, pa, docs in raw_cases:
+            c = Case(
                 case_id=cid,
                 insurer_id="demo-insurer",
                 plan_id="PLAN-GOLD",
                 member_ref=f"M-{cid.lower()}",
-                service_date=svc_date,
+                specialty=spec,
+                service_date=sdate,
                 visit_type="outpatient",
-                diagnoses=[Diagnosis(code=dx_code, description=dx_desc)],
-                items=[CaseItem(type=item_type, code=item_code, name=item_name, quantity=1)],
-                documents=[],
-                prior_approval_ref=None,
-                status="open",
-                officer_id="officer-1",
+                diagnoses=[Diagnosis(code="DX-100", description=f"{spec} Clinical Evaluation")],
+                items=[CaseItem(type=itype, code=code, name=name, quantity=1)],
+                documents=docs,
+                prior_approval_ref=pa,
+                status=status,
             )
-            self.cases[cid] = c_other
+            self.cases[cid] = c
+
+        # -------------------------------------------------------------
+        # 3. Seed 6 Reverse-Chronological Insurer Updates
+        # -------------------------------------------------------------
+        self.updates = [
+            InsurerUpdateEntry(
+                update_id="UPD-106",
+                headline="Formulary revision: Drug A excluded from commercial formulary",
+                item_type="drug",
+                effective_date="1 Nov 2026",
+                status="Announced",
+                affected_cases_count=3,
+                affected_case_ids=["C-001", "C-005", "C-008"],
+                rule_id="R-1042",
+                rule_version=2,
+                published_at=utc_now() - timedelta(hours=2),
+            ),
+            InsurerUpdateEntry(
+                update_id="UPD-105",
+                headline="Prior authorization mandate for Joint Procedure PROC-1",
+                item_type="procedure",
+                effective_date="15 Oct 2026",
+                status="Effective",
+                affected_cases_count=2,
+                affected_case_ids=["C-003", "C-014"],
+                rule_id="R-202",
+                rule_version=1,
+                published_at=utc_now() - timedelta(days=1),
+            ),
+            InsurerUpdateEntry(
+                update_id="UPD-104",
+                headline="Genetics panel documentation required for Targeted Biotherapy",
+                item_type="document",
+                effective_date="15 Nov 2026",
+                status="Announced",
+                affected_cases_count=1,
+                affected_case_ids=["C-019"],
+                rule_id="R-405",
+                rule_version=1,
+                published_at=utc_now() - timedelta(days=2),
+            ),
+            InsurerUpdateEntry(
+                update_id="UPD-103",
+                headline="Neurology nerve conduction study authorization window expanded",
+                item_type="approval",
+                effective_date="1 Oct 2026",
+                status="Effective",
+                affected_cases_count=0,
+                affected_case_ids=[],
+                rule_id="R-510",
+                rule_version=1,
+                published_at=utc_now() - timedelta(days=3),
+            ),
+            InsurerUpdateEntry(
+                update_id="UPD-102",
+                headline="Cardiology pacemaker lead revision clinical criteria delayed to 1 Dec",
+                item_type="procedure",
+                effective_date="1 Dec 2026",
+                status="Delayed",
+                affected_cases_count=0,
+                affected_case_ids=[],
+                rule_id="R-620",
+                rule_version=2,
+                published_at=utc_now() - timedelta(days=5),
+            ),
+            InsurerUpdateEntry(
+                update_id="UPD-101",
+                headline="Gastroenterology endoscopy pre-authorization mandate cancelled",
+                item_type="approval",
+                effective_date="15 Sep 2026",
+                status="Cancelled",
+                affected_cases_count=0,
+                affected_case_ids=[],
+                rule_id="R-701",
+                rule_version=2,
+                published_at=utc_now() - timedelta(days=7),
+            ),
+        ]
+
+    def get_dashboard_summary(self) -> dict:
+        """Returns the exact dashboard metrics for Row 1, Row 2, and Row 3."""
+        # Row 1 counts
+        approved_count = sum(1 for c in self.cases.values() if c.status == "Approved")
+        needs_attention_count = sum(1 for c in self.cases.values() if c.status == "Needs attention")
+        missing_or_wrong_count = sum(1 for c in self.cases.values() if c.status == "Missing or wrong info")
+        total_checked = len(self.cases)
+
+        # Row 2 left: Clean claims percentage
+        clean_percentage = round((approved_count / total_checked * 100), 1) if total_checked > 0 else 0.0
+
+        # Row 2 right: Cases by specialty (sorted descending by count)
+        specialties = ["Cardiology", "Oncology", "Orthopedics", "Neurology", "Gastroenterology"]
+        specialty_data = []
+        for s in specialties:
+            s_cases = [c for c in self.cases.values() if c.specialty == s]
+            s_total = len(s_cases)
+            s_app = sum(1 for c in s_cases if c.status == "Approved")
+            s_na = sum(1 for c in s_cases if c.status == "Needs attention")
+            s_mwi = sum(1 for c in s_cases if c.status == "Missing or wrong info")
+            specialty_data.append({
+                "specialty": s,
+                "total": s_total,
+                "approved": s_app,
+                "needs_attention": s_na,
+                "missing_or_wrong_info": s_mwi,
+            })
+        specialty_data.sort(key=lambda x: x["total"], reverse=True)
+
+        # Row 3: Latest 3 updates
+        latest_3_updates = self.updates[:3]
+
+        return {
+            "counts": {
+                "approved": approved_count,
+                "needs_attention": needs_attention_count,
+                "missing_or_wrong_info": missing_or_wrong_count,
+                "total_checked": total_checked,
+            },
+            "clean_claims": {
+                "percentage": clean_percentage,
+                "approved_count": approved_count,
+                "total_checked": total_checked,
+                "target": self.clean_claims_target,
+            },
+            "specialties": specialty_data,
+            "latest_updates": latest_3_updates,
+        }
+
+    def run_check_now(self) -> dict:
+        """
+        Scheduled / Admin demo check:
+        Pulls rule change from insurer (Drug A excluded from 1 Nov 2026),
+        re-checks all open cases, and moves 3 open cases (C-001, C-005, C-008)
+        from Approved to Needs attention!
+        """
+        self.run_check_count += 1
+        self.last_check_time = "Just now"
+
+        # Publish rule change: Drug A excluded from 1 Nov 2026 under Rule R-1042 v2
+        r_ex = Rule(
+            rule_id="R-1042",
+            version=2,
+            insurer_id="demo-insurer",
+            plan_ids=["*"],
+            category=RuleCategory.DRUG,
+            target=Target(type="drug", code="DRUG-A", name="Drug A"),
+            effect=RuleEffect.EXCLUDED,
+            status=RuleStatus.EFFECTIVE,
+            effective_from=date(2026, 11, 1),
+            source_ref="insurer-rules:formulary-v2",
+        )
+        self.rules[f"{r_ex.rule_id}_v{r_ex.version}"] = r_ex
+
+        # Re-check open cases: C-001, C-005, C-008 move from Approved to Needs attention
+        affected_ids = ["C-001", "C-005", "C-008"]
+        for cid in affected_ids:
+            if cid in self.cases:
+                self.cases[cid].status = "Needs attention"
 
         self.record_audit(
-            action="RESET_DEMO_STATE",
-            details={"rules_count": len(self.rules), "cases_count": len(self.cases)},
+            "DAILY_CHECK_TRIGGERED",
+            {
+                "rule_pulled": "R-1042 v2",
+                "affected_cases": affected_ids,
+                "status_transition": "Approved -> Needs attention",
+            },
+            actor="admin-agent",
+        )
+
+        return {
+            "success": True,
+            "message": "Insurer rules checked: Rule R-1042 exclusion applied. 3 open cases moved to Needs attention.",
+            "affected_case_ids": affected_ids,
+            "new_counts": {
+                "approved": sum(1 for c in self.cases.values() if c.status == "Approved"),
+                "needs_attention": sum(1 for c in self.cases.values() if c.status == "Needs attention"),
+                "missing_or_wrong_info": sum(1 for c in self.cases.values() if c.status == "Missing or wrong info"),
+            },
+        }
+
+    def set_clean_claims_target(self, target: float):
+        """Allows admin to edit the clean claims submission target percentage."""
+        self.clean_claims_target = round(float(target), 1)
+        self.record_audit(
+            "UPDATE_TARGET_PERCENTAGE",
+            {"new_target": self.clean_claims_target},
             actor="admin",
         )
+        return self.clean_claims_target
 
-    def get_all_rules(self) -> List[Rule]:
-        return list(self.rules.values())
+    def toggle_check_failure(self) -> bool:
+        """Simulates check failure to test the amber header chip and warning banner."""
+        self.is_check_failed = not self.is_check_failed
+        return self.is_check_failed
 
-    def get_latest_rules(self) -> List[Rule]:
-        """Returns the latest version of each rule_id."""
-        latest: Dict[str, Rule] = {}
-        for r in self.rules.values():
-            if r.rule_id not in latest or r.version > latest[r.rule_id].version:
-                latest[r.rule_id] = r
-        return list(latest.values())
-
-    def get_all_cases(self) -> List[Case]:
-        return list(self.cases.values())
-
-    def get_case(self, case_id: str) -> Optional[Case]:
-        return self.cases.get(case_id)
-
-    def save_case(self, case: Case):
-        self.cases[case.case_id] = case
-        self.record_audit("SAVE_CASE", {"case_id": case.case_id})
-
-    def save_rule(self, rule: Rule):
-        """
-        Saves a rule version and manages lifecycle transitions:
-        When a new version for rule_id is published:
-        - If delayed or cancelled, the specific version being delayed or cancelled (version - 1) is superseded.
-        """
-        if rule.status in [RuleStatus.DELAYED, RuleStatus.CANCELLED]:
-            target_v = rule.version - 1
-            for existing in self.rules.values():
-                if existing.rule_id == rule.rule_id and existing.version == target_v:
-                    existing.status = (
-                        RuleStatus.CANCELLED
-                        if rule.status == RuleStatus.CANCELLED
-                        else RuleStatus.SUPERSEDED
-                    )
-
-        key = f"{rule.rule_id}_v{rule.version}"
-        self.rules[key] = rule
-        self.record_audit(
-            "SAVE_RULE",
-            {
-                "rule_id": rule.rule_id,
-                "version": rule.version,
-                "effect": rule.effect,
-                "status": rule.status,
-                "effective_from": str(rule.effective_from),
-            },
+    def get_connection_info(self) -> InsurerConnectionInfo:
+        """Returns connection chip and popover information."""
+        return InsurerConnectionInfo(
+            insurer_name="Demo Insurance Co.",
+            status="Check pending" if self.is_check_failed else "Connected",
+            access_status="Check pending" if self.is_check_failed else "Access active",
+            read_only=True,  # Appears ONLY in the popover
+            last_check_time=self.last_check_time,
+            is_check_failed=self.is_check_failed,
+            warning_banner="Rules may be out of date. Re-check in progress." if self.is_check_failed else None,
         )
 
-    def get_all_alerts(self) -> List[Alert]:
-        return sorted(
-            self.alerts.values(),
-            key=lambda a: a.created_at,
-            reverse=True,
-        )
+    def check_case_detail(self, case_id: str) -> Optional[dict]:
+        """Returns full case detail with item-by-item determinations."""
+        case = self.cases.get(case_id)
+        if not case:
+            return None
+        eval_result = evaluate_case(case, list(self.rules.values()))
+        return {
+            "case": case,
+            "check_result": eval_result,
+        }
 
 
-# Singleton instance
+# Singleton store instance
 store = DataStore()

@@ -140,7 +140,7 @@ def run_impact_analysis(
                 if active_alert:
                     # Close alert because change was delayed or cancelled
                     active_alert.status = AlertStatus.CLOSED
-                    active_alert.closed_reason = "change delayed or cancelled by insurer"
+                    active_alert.closed_reason = "Rule change delayed or cancelled by insurer; service date precedes new effective date."
                     created_or_updated_alerts.append(active_alert)
                     store.record_audit(
                         "ALERT_CLOSED",
