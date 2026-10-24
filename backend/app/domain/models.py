@@ -61,6 +61,7 @@ class Rule(BaseModel):
     source_ref: str
     source_title: Optional[str] = None
     source_url: Optional[str] = None
+    official_reference_url: Optional[str] = None
     bulletin_summary: Optional[str] = None
     action_guidance: Optional[List[str]] = None
     received_at: datetime = Field(default_factory=utc_now)
@@ -126,6 +127,7 @@ class ItemVerdict(BaseModel):
     full_issue_text: str # Plain single sentence combining statement, rule reference, and action
     source_title: Optional[str] = None
     source_url: Optional[str] = None
+    official_reference_url: Optional[str] = None
     why_not_approved: Optional[str] = None
     bulletin_summary: Optional[str] = None
     action_guidance: Optional[List[str]] = None

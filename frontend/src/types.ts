@@ -64,6 +64,7 @@ export interface ItemVerdict {
   full_issue_text: string;
   source_title?: string;
   source_url?: string;
+  official_reference_url?: string;
   why_not_approved?: string;
   bulletin_summary?: string;
   action_guidance?: string[];

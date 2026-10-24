@@ -171,15 +171,18 @@ export const PolicyBulletinModal: React.FC<PolicyBulletinModalProps> = ({
 
               {/* External Link */}
               {bulletin.official_reference_url && (
-                <div className="pt-2 flex items-center justify-between border-t border-[#E8EFEA]">
-                  <span className="text-xs text-[#698579]">Official Payer Portal Publication:</span>
+                <div className="pt-3 pb-1 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-[#E8EFEA] bg-[#F8FAF9] -mx-6 -mb-6 p-4 rounded-b-2xl">
+                  <div>
+                    <span className="block text-xs font-bold text-[#092328]">Official Insurer Policy Document</span>
+                    <span className="text-[11px] text-[#698579]">Direct link to verified publication on payer portal</span>
+                  </div>
                   <a
                     href={bulletin.official_reference_url}
                     target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-[#2A835F] hover:text-[#1F6347] hover:underline"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#2A835F] text-white text-xs font-bold hover:bg-[#1F6347] transition-colors shadow-2xs"
                   >
-                    <span>Open Payer Source Circular</span>
+                    <span>Open Official Document</span>
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                     </svg>

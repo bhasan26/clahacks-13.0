@@ -10,10 +10,19 @@ Tests:
 7. Simulated check failure toggle.
 """
 
+import pytest
 from fastapi.testclient import TestClient
 from app.main import app
+from app.db.store import store
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def setup_demo_store():
+    store.reset_demo_state()
+    yield
+    store.reset_state(seed_demo=False)
 
 
 def test_api_health_and_connection():

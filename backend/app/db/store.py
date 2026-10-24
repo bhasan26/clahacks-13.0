@@ -100,7 +100,7 @@ class DataStore:
                 "Prior Authorization reference number issued prior to drug administration.",
             ],
             denial_risk="Claims submitted without prior auth reference or without attached pathology report will be rejected under Claim Adjustment Reason Code CO-197 (Precertification/authorization absent).",
-            official_reference_url="https://www.aetna.com/cpb/medical/data/600_699/0645.html",
+            official_reference_url="https://www.aetna.com/cpb/medical/data/800_899/0890.html",
         )
         self.bulletins[b1.rule_id] = b1
 
@@ -119,13 +119,13 @@ class DataStore:
                 "Chart note showing current HbA1c >= 7.0% within the past 90 days.",
             ],
             denial_risk="Submissions without Type 2 Diabetes diagnostic code will be denied under CO-96 (Non-covered charge).",
-            official_reference_url="https://www.bcbs.com/clinical-coverage/circulars/2026-1042.html",
+            official_reference_url="https://www.fepblue.org/pilot-programs/glp-1-coverage",
         )
         self.bulletins[b2.rule_id] = b2
 
         b3 = PolicyBulletin(
             rule_id="UHC-POL-405",
-            title="UnitedHealthcare Medical Policy #2026-405: Adalimumab & Targeted Immunomodulators",
+            title="UnitedHealthcare Medical Policy #2026-405: Adalimumab (Humira & Biosimilars)",
             insurer_name="UnitedHealthcare",
             effective_date="15 Nov 2026",
             last_reviewed="20 Oct 2026",
@@ -137,7 +137,7 @@ class DataStore:
                 "Approved Prior Authorization from OptumRx/UHC specialty committee.",
             ],
             denial_risk="Denied under CO-197 / Step Therapy non-fulfillment.",
-            official_reference_url="https://www.uhcprovider.com/policies/2026-405.html",
+            official_reference_url="https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-medical-drug/humira.pdf",
         )
         self.bulletins[b3.rule_id] = b3
 
@@ -186,7 +186,7 @@ class DataStore:
                 "Pre-service Prior Authorization reference code attached.",
             ],
             denial_risk="Rejection code CO-197 if submitted without authorization number.",
-            official_reference_url="https://www.uhcprovider.com/policies/2026-202.html",
+            official_reference_url="https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
         )
         self.bulletins[b_uhc_knee.rule_id] = b_uhc_knee
 
@@ -299,6 +299,7 @@ class DataStore:
             source_ref="aetna:cpb-0645-v2",
             source_title="Aetna Clinical Policy Bulletin #0645: Oncology Biotherapies",
             source_url="/api/bulletins/AETNA-CPB-0645",
+            official_reference_url="https://www.aetna.com/cpb/medical/data/800_899/0890.html",
             bulletin_summary="Keytruda moved to Tier 4 Specialty. Requires Prior Authorization and companion Biomarker / Genetics Panel Report.",
             action_guidance=[
                 "Obtain companion Biomarker / Genetics Panel Report from pathology.",
@@ -322,6 +323,7 @@ class DataStore:
             source_ref="bcbs:circular-2026-1042",
             source_title="Blue Cross Blue Shield Policy Circular 2026-1042: GLP-1 Coverage Limits",
             source_url="/api/bulletins/BCBS-CIRC-2026-1042",
+            official_reference_url="https://www.fepblue.org/pilot-programs/glp-1-coverage",
             bulletin_summary="Excluded for weight management under standard employer plans. Covered only for Type 2 Diabetes.",
             action_guidance=[
                 "Confirm primary ICD-10 diagnosis is Type 2 Diabetes (E11.x).",
@@ -345,6 +347,7 @@ class DataStore:
             source_ref="uhc:pol-405-specialty",
             source_title="UnitedHealthcare Medical Policy #2026-405: Targeted Immunomodulators",
             source_url="/api/bulletins/UHC-POL-405",
+            official_reference_url="https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-medical-drug/humira.pdf",
             bulletin_summary="Prior authorization required with documented step-therapy trial of preferred biosimilar.",
             action_guidance=[
                 "Document trial of preferred biosimilar (Hadlima or Hyrimoz).",
@@ -367,6 +370,7 @@ class DataStore:
             source_ref="uhc:pol-202-ortho",
             source_title="UnitedHealthcare Medical Policy #2026-202: Total Joint Replacement",
             source_url="/api/bulletins/UHC-POL-202",
+            official_reference_url="https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
             bulletin_summary="Total knee arthroplasty covered with verified prior authorization reference.",
             action_guidance=["Prior authorization verified: claim ready for electronic submission."],
         )

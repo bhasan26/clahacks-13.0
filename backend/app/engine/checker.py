@@ -179,6 +179,7 @@ def check_item(
                 full_issue_text=f"{sentence} {rule_ref} {action}",
                 source_title=latest_upcoming.source_title or f"Policy Bulletin {latest_upcoming.rule_id}",
                 source_url=latest_upcoming.source_url or f"/api/bulletins/{latest_upcoming.rule_id}",
+                official_reference_url=latest_upcoming.official_reference_url,
                 bulletin_summary=latest_upcoming.bulletin_summary,
                 action_guidance=latest_upcoming.action_guidance,
             )
@@ -204,6 +205,7 @@ def check_item(
     rule_ref = f"Rule {best_rule.rule_id}."
     src_title = best_rule.source_title or f"Insurer Policy Bulletin {best_rule.rule_id}"
     src_url = best_rule.source_url or f"/api/bulletins/{best_rule.rule_id}"
+    official_ref = best_rule.official_reference_url
     b_summary = best_rule.bulletin_summary
     guidance = best_rule.action_guidance or [best_rule.source_ref]
 
@@ -224,6 +226,7 @@ def check_item(
             full_issue_text=f"{sentence} {rule_ref} {action}",
             source_title=src_title,
             source_url=src_url,
+            official_reference_url=official_ref,
             why_not_approved=why,
             bulletin_summary=b_summary,
             action_guidance=guidance or ["Discuss formulary alternatives with the ordering physician before submission."],
@@ -250,6 +253,7 @@ def check_item(
                 full_issue_text=f"{sentence} {rule_ref} {action}",
                 source_title=src_title,
                 source_url=src_url,
+                official_reference_url=official_ref,
                 why_not_approved=why,
                 bulletin_summary=b_summary,
                 action_guidance=guidance or ["Submit prior authorization request via payer provider portal before service is rendered."],
@@ -281,6 +285,7 @@ def check_item(
                 full_issue_text=f"{sentence} {rule_ref} {action}",
                 source_title=src_title,
                 source_url=src_url,
+                official_reference_url=official_ref,
                 why_not_approved=why,
                 bulletin_summary=b_summary,
                 action_guidance=guidance or [f"Obtain {docs_str} from medical records department and attach to claim file."],
@@ -301,6 +306,7 @@ def check_item(
         full_issue_text=f"{sentence} {rule_ref} {action}",
         source_title=src_title,
         source_url=src_url,
+        official_reference_url=official_ref,
         bulletin_summary=b_summary,
         action_guidance=guidance or ["Clean claim: ready for electronic clearinghouse submission."],
     )
