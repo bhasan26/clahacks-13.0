@@ -155,6 +155,25 @@ class DataStore:
         )
         self.bulletins[b5.rule_id] = b5
 
+        b_uhc_knee = PolicyBulletin(
+            rule_id="UHC-POL-202",
+            title="UnitedHealthcare Medical Policy #2026-202: Total Joint Replacement",
+            insurer_name="UnitedHealthcare",
+            effective_date="1 Jan 2026",
+            last_reviewed="24 Oct 2026",
+            status="Active / Approved with PA",
+            policy_type="Major Joint Reconstruction Prior Authorization Policy",
+            summary="Elective total knee arthroplasty (CPT 27447) is a covered benefit when accompanied by a valid Prior Authorization confirmation code.",
+            coverage_criteria=[
+                "Documented severe osteoarthritis (Kellgren-Lawrence Grade 3 or 4).",
+                "Minimum 6-week trial of conservative treatment (physical therapy, NSAIDs, or intra-articular injections).",
+                "Pre-service Prior Authorization reference code attached.",
+            ],
+            denial_risk="Rejection code CO-197 if submitted without authorization number.",
+            official_reference_url="https://www.uhcprovider.com/policies/2026-202.html",
+        )
+        self.bulletins[b_uhc_knee.rule_id] = b_uhc_knee
+
         # -------------------------------------------------------------
         # Baseline Rules (Demo Insurer + Real Payer Policies)
         # -------------------------------------------------------------
@@ -317,6 +336,25 @@ class DataStore:
             ],
         )
         self.rules[f"{r_uhc_humira.rule_id}_v{r_uhc_humira.version}"] = r_uhc_humira
+
+        # --- UHC TOTAL KNEE PROCEDURE RULE ---
+        r_uhc_knee = Rule(
+            rule_id="UHC-POL-202",
+            version=1,
+            insurer_id="uhc",
+            plan_ids=["*"],
+            category=RuleCategory.PROCEDURE,
+            target=Target(type="procedure", code="PROC-1", name="Total Knee Arthroplasty (CPT 27447)"),
+            effect=RuleEffect.REQUIRES_PRIOR_APPROVAL,
+            status=RuleStatus.EFFECTIVE,
+            effective_from=date(2026, 1, 1),
+            source_ref="uhc:pol-202-ortho",
+            source_title="UnitedHealthcare Medical Policy #2026-202: Total Joint Replacement",
+            source_url="/api/bulletins/UHC-POL-202",
+            bulletin_summary="Total knee arthroplasty covered with verified prior authorization reference.",
+            action_guidance=["Prior authorization verified: claim ready for electronic submission."],
+        )
+        self.rules[f"{r_uhc_knee.rule_id}_v{r_uhc_knee.version}"] = r_uhc_knee
 
         # -------------------------------------------------------------
         # 2. Seed 40 Cases Across 5 Specialties
