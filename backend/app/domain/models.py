@@ -252,24 +252,27 @@ class ProposedPolicyChange(BaseModel):
     proposal_id: str
     document_id: str
     document_name: str
-    insurer_id: str
-    insurer_name: str
+    insurer_id: Optional[str] = None
+    insurer_name: Optional[str] = None
     plan_ids: List[str] = Field(default_factory=list)
-    policy_title: str
+    policy_title: Optional[str] = None
     policy_reference: Optional[str] = None
-    target_type: Literal["drug", "procedure", "service"]
-    target_code: str
+    target_type: Optional[Literal["drug", "procedure", "service"]] = None
+    target_code: Optional[str] = None
     target_name: Optional[str] = None
     previous_effect: Optional[str] = None
-    proposed_effect: RuleEffect
+    proposed_effect: Optional[RuleEffect] = None
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
     change_type: PolicyChangeType = "new_rule"
     conditions: Optional[Dict[str, Any]] = None
-    supporting_quote: str
+    supporting_quote: str = ""
     source_page: int = 1
     confidence: Optional[float] = None
     validation_warnings: List[str] = Field(default_factory=list)
+    missing_fields: List[str] = Field(default_factory=list)
+    is_complete: bool = False
+    requires_code_mapping: bool = False
     review_state: ReviewStateType = "pending_review"
     reviewer_notes: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -284,7 +287,7 @@ class PolicyDiff(BaseModel):
     existing_rule_id: Optional[str] = None
     existing_rule_version: Optional[int] = None
     previous_effect: Optional[str] = None
-    proposed_effect: str
+    proposed_effect: Optional[str] = None
     previous_effective_from: Optional[str] = None
     proposed_effective_from: Optional[str] = None
     is_delay: bool = False
@@ -314,6 +317,8 @@ class ImpactPreviewResult(BaseModel):
     unchanged_cases: int
     cases: List[ImpactCaseItem]
     simulation_timestamp: datetime = Field(default_factory=utc_now)
+    is_demo_mode: bool = False
+    notice: Optional[str] = None
 
 
 class ExtractedDocumentResult(BaseModel):
@@ -327,4 +332,39 @@ class ExtractedDocumentResult(BaseModel):
     diffs: List[PolicyDiff]
     impact_preview: Optional[ImpactPreviewResult] = None
     extracted_at: datetime = Field(default_factory=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Official External Policy Source Monitoring (Feature 8)
+# ---------------------------------------------------------------------------
+class OfficialPolicySource(BaseModel):
+    source_id: str
+    name: str
+    insurer_name: str
+    official_url: str
+    policy_scope: str = "National Coverage Determinations & Clinical Bulletins"
+    last_checked_at: Optional[datetime] = None
+    last_changed_at: Optional[datetime] = None
+    content_hash: Optional[str] = None
+    status: Literal["active", "connected", "checking", "unchanged", "change_detected", "error"] = "active"
+    latest_document_title: Optional[str] = None
+    pending_proposal_ids: List[str] = Field(default_factory=list)
+    error_message: Optional[str] = None
+    is_real_external_source: bool = True
+    source_type: str = "official_portal"
+
+
+class SourceCheckHistory(BaseModel):
+    check_id: str
+    source_id: str
+    source_name: Optional[str] = None
+    checked_at: datetime = Field(default_factory=utc_now)
+    status: str
+    content_hash: Optional[str] = None
+    changed: bool = False
+    summary: str
+    proposals_created: List[str] = Field(default_factory=list)
+    affected_claims_count: int = 0
+    error_message: Optional[str] = None
+
 

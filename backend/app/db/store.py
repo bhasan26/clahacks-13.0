@@ -8,6 +8,7 @@ Matches all user specifications:
 - Connection status for header chip: "Demo Insurance Co.", "Access active", "Read-only" in popover only.
 """
 
+import os
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -20,12 +21,14 @@ from app.domain.models import (
     ExtractedDocumentResult,
     InsurerConnectionInfo,
     InsurerUpdateEntry,
+    OfficialPolicySource,
     PolicyBulletin,
     ProposedPolicyChange,
     Rule,
     RuleCategory,
     RuleEffect,
     RuleStatus,
+    SourceCheckHistory,
     Target,
     utc_now,
 )
@@ -46,6 +49,9 @@ class DataStore:
         self.is_check_failed: bool = False
         self.last_check_time: str = "Live"
         self.run_check_count: int = 0
+        self.demo_mode: bool = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1")
+        self.official_sources: Dict[str, OfficialPolicySource] = {}
+        self.source_history: List[SourceCheckHistory] = []
 
         # Start clean by default with zero demo entries
         self.reset_state(seed_demo=False)
@@ -94,7 +100,18 @@ class DataStore:
 
     def load_rules_and_bulletins(self):
         """Loads official insurer bulletins and versioned payer rules."""
-        # -------------------------------------------------------------
+        if "SRC-CMS-MEDICARE" not in self.official_sources:
+            self.official_sources["SRC-CMS-MEDICARE"] = OfficialPolicySource(
+                source_id="SRC-CMS-MEDICARE",
+                name="CMS Medicare Coverage Database",
+                insurer_name="Centers for Medicare & Medicaid Services (CMS)",
+                official_url="https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?ncdid=372",
+                policy_scope="National Coverage Determinations (NCDs) & Clinical Guidelines",
+                source_type="official_portal",
+                status="connected",
+                is_real_external_source=True,
+            )
+
         b1 = PolicyBulletin(
             rule_id="AETNA-CPB-0645",
             title="Aetna Clinical Policy Bulletin #0645: Pembrolizumab (Keytruda)",
@@ -745,6 +762,26 @@ class DataStore:
                 proposal.target_name = str(edited_fields["target_name"]).strip()
             if "policy_title" in edited_fields and edited_fields["policy_title"]:
                 proposal.policy_title = str(edited_fields["policy_title"]).strip()
+            if "insurer_id" in edited_fields and edited_fields["insurer_id"]:
+                proposal.insurer_id = str(edited_fields["insurer_id"]).strip().lower()
+
+        # Reject incomplete proposals — missing mandatory fields must be supplied before approval
+        missing_fields = []
+        if not proposal.insurer_id:
+            missing_fields.append("insurer_id")
+        if not proposal.target_code:
+            missing_fields.append("target_code")
+        if not proposal.proposed_effect:
+            missing_fields.append("proposed_effect")
+        if not proposal.effective_from and proposal.change_type != "cancelled":
+            missing_fields.append("effective_from")
+
+        if missing_fields:
+            raise ValueError(
+                f"Cannot approve incomplete proposal {proposal.proposal_id}. "
+                f"Missing mandatory fields: {', '.join(missing_fields)}. "
+                "Human reviewer must supply verified values before approval."
+            )
 
         # Find existing rule to version or create new
         p_code = proposal.target_code.upper().strip()
@@ -767,7 +804,7 @@ class DataStore:
             RuleCategory.PROCEDURE if proposal.target_type == "procedure" else RuleCategory.SERVICE
         )
 
-        eff_date = proposal.effective_from or date(2026, 11, 1)
+        eff_date = proposal.effective_from or date.today()
 
         new_rule = Rule(
             rule_id=rule_id,
@@ -776,7 +813,7 @@ class DataStore:
             plan_ids=proposal.plan_ids or ["*"],
             category=rule_cat,
             target=Target(
-                type=proposal.target_type,
+                type=proposal.target_type or "drug",
                 code=proposal.target_code,
                 name=proposal.target_name or proposal.target_code,
             ),
@@ -799,12 +836,12 @@ class DataStore:
 
         self.bulletins[rule_id] = PolicyBulletin(
             rule_id=rule_id,
-            title=proposal.policy_title,
-            insurer_name=proposal.insurer_name,
+            title=proposal.policy_title or f"Policy Mandate {rule_id}",
+            insurer_name=proposal.insurer_name or (proposal.insurer_id.upper() if proposal.insurer_id else "Authorized Insurer"),
             effective_date=eff_date.strftime("%d %b %Y"),
             last_reviewed=utc_now().strftime("%d %b %Y"),
             status=bulletin_status,
-            policy_type=f"{proposal.target_type.title()} Coverage Policy Mandate",
+            policy_type=f"{(proposal.target_type or 'Clinical').title()} Coverage Policy Mandate",
             summary=f"Official policy mandate extracted from '{proposal.document_name}' and approved by hospital reviewer. Quotation: \"{proposal.supporting_quote}\"",
             coverage_criteria=[
                 f"Applies to {proposal.target_name or proposal.target_code} ({proposal.target_code}).",
@@ -815,19 +852,22 @@ class DataStore:
             official_reference_url=None,
         )
 
-        # Re-evaluate all open claims in caseload
+        # Re-evaluate all open claims in caseload containing the targeted item
         affected_case_ids: List[str] = []
+        active_rules = list(self.rules.values())
         for cid, case in self.cases.items():
-            check_res = evaluate_case(case, list(self.rules.values()), governing_date=case.service_date)
-            # Find matching item verdict
+            if not any(item.code.upper().strip() == p_code for item in case.items):
+                continue
+
+            check_res = evaluate_case(case, active_rules, governing_date=case.service_date)
             for iv in check_res.results:
                 if iv.item.code.upper().strip() == p_code:
                     if iv.result != "Covered":
                         case.status = "Needs attention"
                         affected_case_ids.append(cid)
                     elif proposal.change_type == "delayed" and case.status == "Needs attention":
-                        # Postponed past service date -> case returns to Approved!
-                        case.status = "Approved"
+                        # Recalculate entire claim: if other restrictions exist, status stays Needs attention!
+                        case.status = check_res.status
                         affected_case_ids.append(cid)
 
         # Add update entry to Updates list
@@ -909,12 +949,28 @@ class DataStore:
         )
         return proposal
 
+    def get_all_cases(self) -> List[Case]:
+        """Returns all caseload cases."""
+        return list(self.cases.values())
+
+    def get_all_rules(self) -> List[Rule]:
+        """Returns all rules."""
+        return list(self.rules.values())
+
     def get_all_alerts(self, status: Optional[str] = None) -> List[Alert]:
         """Returns alerts sorted newest first, optionally filtered by status."""
         alerts = list(self.alerts.values())
         if status:
             alerts = [a for a in alerts if a.status.value.lower() == status.lower()]
         return sorted(alerts, key=lambda a: a.created_at, reverse=True)
+
+    def get_open_alerts(self) -> List[Alert]:
+        """Returns open alerts."""
+        return self.get_all_alerts(status="open")
+
+    def clear_all_cases(self):
+        """Clears all cases from caseload."""
+        self.cases.clear()
 
     def get_alerts_for_case(self, case_id: str) -> List[Alert]:
         """Returns all alerts for a specific case."""
@@ -960,6 +1016,28 @@ class DataStore:
         )
         return alert
 
+    def set_demo_mode(self, enabled: bool):
+        self.demo_mode = enabled
+        self.record_audit("DEMO_MODE_CHANGED", {"demo_mode": enabled}, actor="admin")
+
+    def get_sources(self) -> List[OfficialPolicySource]:
+        return list(self.official_sources.values())
+
+    def get_source(self, source_id: str) -> Optional[OfficialPolicySource]:
+        return self.official_sources.get(source_id)
+
+    def save_source(self, source: OfficialPolicySource):
+        self.official_sources[source.source_id] = source
+
+    def add_source_history(self, history: SourceCheckHistory):
+        self.source_history.insert(0, history)
+
+    def get_source_history(self, source_id: Optional[str] = None) -> List[SourceCheckHistory]:
+        if source_id:
+            return [h for h in self.source_history if h.source_id == source_id]
+        return self.source_history
+
 
 # Singleton store instance
 store = DataStore()
+

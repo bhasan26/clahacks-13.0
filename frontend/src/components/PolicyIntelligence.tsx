@@ -1,15 +1,22 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ExtractedDocumentResult,
   ProposedPolicyChange,
   PolicyDiff,
   ImpactPreviewResult,
+  OfficialPolicySource,
+  SourceCheckHistory,
 } from '../types';
 import {
   extractPolicyDocument,
   previewPolicyImpact,
   approvePolicyProposal,
   rejectPolicyProposal,
+  fetchOfficialSources,
+  fetchSourcesStatus,
+  checkOfficialSource,
+  fetchDemoMode,
+  setDemoMode,
 } from '../api';
 
 interface PolicyIntelligenceProps {
@@ -21,6 +28,16 @@ export const PolicyIntelligence: React.FC<PolicyIntelligenceProps> = ({
   onPolicyApproved,
   onNavigateToCases,
 }) => {
+  // Official Policy Source Sentinel State (Feature 8)
+  const [sources, setSources] = useState<OfficialPolicySource[]>([]);
+  const [sourcesStatus, setSourcesStatus] = useState<any>(null);
+  const [isCheckingSource, setIsCheckingSource] = useState(false);
+  const [latestSourceHistory, setLatestSourceHistory] = useState<SourceCheckHistory | null>(null);
+
+  // Demo Mode State (FIX 2)
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
+  const [isTogglingDemo, setIsTogglingDemo] = useState(false);
+
   // Input & Upload State
   const [activeInputTab, setActiveInputTab] = useState<'upload' | 'paste' | 'preset'>('preset');
   const [pastedText, setPastedText] = useState('');
@@ -57,6 +74,55 @@ export const PolicyIntelligence: React.FC<PolicyIntelligenceProps> = ({
     affectedCaseIds: string[];
     message: string;
   } | null>(null);
+
+  useEffect(() => {
+    loadSourcesAndSettings();
+  }, []);
+
+  const loadSourcesAndSettings = async () => {
+    try {
+      const [srcList, srcStatus, demo] = await Promise.all([
+        fetchOfficialSources(),
+        fetchSourcesStatus(),
+        fetchDemoMode(),
+      ]);
+      setSources(srcList);
+      setSourcesStatus(srcStatus);
+      if (srcStatus?.latest_check) {
+        setLatestSourceHistory(srcStatus.latest_check);
+      }
+      setIsDemoMode(demo.demo_mode);
+    } catch (e) {
+      console.error('Failed to load sources or settings:', e);
+    }
+  };
+
+  const handleCheckSourceNow = async (sourceId?: string) => {
+    setIsCheckingSource(true);
+    setErrorMessage(null);
+    try {
+      const res = await checkOfficialSource(sourceId);
+      setLatestSourceHistory(res);
+      await loadSourcesAndSettings();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to check official policy source.');
+    } finally {
+      setIsCheckingSource(false);
+    }
+  };
+
+  const handleToggleDemoMode = async () => {
+    setIsTogglingDemo(true);
+    try {
+      const nextMode = !isDemoMode;
+      const res = await setDemoMode(nextMode);
+      setIsDemoMode(res.demo_mode);
+    } catch (err: any) {
+      console.error('Failed to toggle demo mode:', err);
+    } finally {
+      setIsTogglingDemo(false);
+    }
+  };
 
   // Demo Preset Texts for 1-Click presentation
   const DEMO_PRESETS = [
@@ -147,13 +213,13 @@ Submissions without an approved authorization reference will be rejected under c
 
   // Helper to initialize edit fields from proposal
   const loadProposalIntoForm = (p: ProposedPolicyChange) => {
-    setEditedTitle(p.policy_title);
-    setEditedCode(p.target_code);
-    setEditedName(p.target_name || p.target_code);
-    setEditedEffect(p.proposed_effect);
-    setEditedEffectiveDate(p.effective_from || '2026-11-01');
+    setEditedTitle(p.policy_title || '');
+    setEditedCode(p.target_code || '');
+    setEditedName(p.target_name || p.target_code || '');
+    setEditedEffect(p.proposed_effect || 'excluded');
+    setEditedEffectiveDate(p.effective_from || '');
     setReviewerNotes(p.reviewer_notes || '');
-    setHighlightedQuote(p.supporting_quote);
+    setHighlightedQuote(p.supporting_quote || '');
     setCurrentPage(p.source_page || 1);
   };
 
@@ -359,6 +425,122 @@ Submissions without an approved authorization reference will be rejected under c
           )}
         </div>
       )}
+
+      {/* OFFICIAL POLICY SOURCES SENTINEL (FEATURE 8) & DEMO MODE CONTROLS (FIX 2) */}
+      <div className="bg-white rounded-2xl border border-[#D5E2D9] p-5 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E8EFEA] pb-3">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-xl bg-[#EBF4EE] text-[#2A835F] flex items-center justify-center font-bold text-sm">
+              🌐
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-black text-[#092328] uppercase tracking-wider">
+                  Official Insurer Policy Sources (Continuous Sentinel)
+                </h2>
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#EBF4EE] text-[#2A835F] border border-[#D5E2D9] flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#2A835F] animate-pulse" />
+                  Live Real-World Insurer Connection
+                </span>
+              </div>
+              <p className="text-xs text-[#698579]">
+                Automated change-detection sentinel for official public insurer policy portals using SHA-256 content fingerprints.
+              </p>
+            </div>
+          </div>
+
+          {/* Demo Mode Toggle (FIX 2) */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs font-semibold text-[#698579]">Environment:</span>
+            <button
+              type="button"
+              disabled={isTogglingDemo}
+              onClick={handleToggleDemoMode}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer flex items-center gap-1.5 ${
+                isDemoMode
+                  ? 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100'
+                  : 'bg-[#092328] text-white border-[#092328] hover:bg-[#133E46]'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isDemoMode ? 'bg-purple-600' : 'bg-emerald-400'}`} />
+              <span>{isDemoMode ? 'Synthetic Demo Data' : 'Live Caseload (0 Fake Claims)'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Source Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {sources.map((src) => (
+            <div key={src.source_id} className="p-4 rounded-xl border border-[#E8EFEA] bg-[#F8FAF9] space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-xs text-[#092328]">{src.name}</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 uppercase">
+                      Official Government Source
+                    </span>
+                  </div>
+                  <a
+                    href={src.official_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] text-[#2A835F] hover:underline flex items-center gap-1 mt-0.5 truncate max-w-xs"
+                  >
+                    <span>{src.official_url}</span>
+                    <span className="text-[10px]">↗</span>
+                  </a>
+                </div>
+                <button
+                  type="button"
+                  disabled={isCheckingSource}
+                  onClick={() => handleCheckSourceNow(src.source_id)}
+                  className="px-3 py-1.5 rounded-lg bg-[#092328] hover:bg-[#133E46] text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                >
+                  {isCheckingSource ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Checking...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>🔄</span>
+                      <span>Check Source Now</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-[11px] pt-2 border-t border-[#E8EFEA]">
+                <div>
+                  <span className="text-[#698579] block text-[10px]">Content Fingerprint (SHA-256):</span>
+                  <span className="font-mono text-[10px] text-[#092328] truncate block" title={src.content_hash || 'Unchecked'}>
+                    {src.content_hash ? src.content_hash.slice(0, 16) + '...' : 'Not yet checked'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[#698579] block text-[10px]">Monitoring Status:</span>
+                  <span className="font-bold text-[11px] text-[#2A835F] flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#2A835F]" />
+                    {src.status.toUpperCase()}
+                  </span>
+                </div>
+              </div>
+
+              {latestSourceHistory && latestSourceHistory.source_id === src.source_id && (
+                <div className="p-2.5 rounded-lg bg-white border border-[#D5E2D9] text-[11px] text-[#092328] space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-[#698579]">
+                    <span>LATEST CHECK RESULT ({new Date(latestSourceHistory.checked_at).toLocaleTimeString()})</span>
+                    <span className={latestSourceHistory.changed ? 'text-amber-700' : 'text-emerald-700'}>
+                      {latestSourceHistory.changed ? '● REVISION DETECTED' : '✓ UNCHANGED'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#698579] leading-tight">{latestSourceHistory.summary}</p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* SECTION 1: DOCUMENT INPUT WORKSPACE (When no document is active) */}
       {!docResult && (
@@ -771,6 +953,17 @@ Submissions without an approved authorization reference will be rejected under c
             </div>
 
             {/* Action Bar: What-If Preview vs Approve */}
+            {(!editedCode.trim() || !editedEffectiveDate.trim()) && (
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium space-y-1">
+                <div className="font-bold flex items-center gap-1.5 text-amber-800">
+                  <span>⚠️ Verification Required Before Approval</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  CoverageGuard prevents unverified policy activation. The uploaded document does not contain an exact billing code or effective date. Please supply verified values in the fields above before submitting approval.
+                </p>
+              </div>
+            )}
+
             <div className="pt-4 border-t border-[#E8EFEA] flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
@@ -794,7 +987,7 @@ Submissions without an approved authorization reference will be rejected under c
                 </button>
                 <button
                   type="button"
-                  disabled={isApproving || activeProposal.review_state === 'approved'}
+                  disabled={isApproving || activeProposal.review_state === 'approved' || !editedCode.trim() || !editedEffectiveDate.trim()}
                   onClick={handleApprove}
                   className="px-5 py-2.5 rounded-xl bg-[#092328] hover:bg-[#2A835F] text-white text-xs font-black transition-all shadow-md cursor-pointer disabled:opacity-50 flex items-center gap-2"
                 >
@@ -805,6 +998,8 @@ Submissions without an approved authorization reference will be rejected under c
                     </>
                   ) : activeProposal.review_state === 'approved' ? (
                     <span>✓ Policy Approved</span>
+                  ) : (!editedCode.trim() || !editedEffectiveDate.trim()) ? (
+                    <span>⚠️ Missing Code / Date</span>
                   ) : (
                     <span>Approve & Apply Policy →</span>
                   )}

@@ -132,24 +132,61 @@ In healthcare insurance processing, hallucinations and unpredictable LLM verdict
 📊 QA TEST SUMMARY: 38 PASSED | 0 FAILED (Total: 38)
 =================================================================
 
-Pytest Unit Suite: 17 / 17 PASSED in 1.03s
-- test_redact_sensitive_identifiers PASSED
-- test_clinical_document_intake_no_fake_drug_when_empty PASSED
-- test_alert_lifecycle_and_task_queue PASSED
-- test_api_health_and_connection PASSED
-- test_api_dashboard_metrics PASSED
-- test_api_cases_and_filters PASSED
-- test_api_case_detail_item_sentences PASSED
-- test_api_run_check_now_flow PASSED
-- test_api_target_editing_and_failure_toggle PASSED
-- test_baseline_case_evaluations PASSED
-- test_temporal_boundary_and_plain_issue_sentence PASSED
-- test_no_matching_rule_behavior PASSED
-- test_extract_policy_from_text PASSED
-- test_what_if_impact_boundary_dates PASSED
-- test_delayed_policy_clears_november_risks PASSED
-- test_approve_policy_workflow_and_idempotency PASSED
-- test_reject_proposal PASSED
+Pytest Unit & Integration Suite: 49 / 49 PASSED in 4.25s
+- Action Center & Privacy Redaction: 3 passed
+- API Endpoints & Dashboard: 6 passed
+- Deterministic Rule Engine: 3 passed
+- Policy Intelligence & Approvals: 5 passed
+- Fixes 1-7, 9-10 Safety & Regression Suite (test_fixes.py): 18 passed
+  * test_unfamiliar_insurance_doc_no_invented_fields PASSED
+  * test_missing_mandatory_fields_blocks_store_approval PASSED
+  * test_unrelated_document_produces_no_fabricated_rules PASSED
+  * test_multiple_policy_rules_no_loop_variable_leakage PASSED
+  * test_multipage_pdf_page_identification PASSED
+  * test_evidence_verification_strict_matching PASSED
+  * test_evidence_verification_scanned_page PASSED
+  * test_document_processor_corrupted_pdf PASSED
+  * test_document_processor_unsupported_file_format PASSED
+  * test_document_processor_oversized_file PASSED
+  * test_matcher_exact_code_no_substring PASSED
+  * test_matcher_insurer_isolation PASSED
+  * test_matcher_plan_wildcard PASSED
+  * test_matcher_effective_date_boundaries PASSED
+  * test_multi_issue_claim_adjudication_on_exclusion_delay PASSED
+  * test_duplicate_proposal_approval_rejected PASSED
+  * test_empty_caseload_in_non_demo_mode_returns_zero_cases PASSED
+  * test_what_if_preview_side_effect_free PASSED
+- Real Official Insurer Connector Suite (test_external_connector.py): 14 passed
+  * test_connector_fingerprint_computation PASSED
+  * test_connector_fetch_success_mocked PASSED
+  * test_connector_http_timeout_handling PASSED
+  * test_connector_http_access_restricted_403 PASSED
+  * test_connector_http_server_error_500 PASSED
+  * test_change_detection_initial_baseline PASSED
+  * test_change_detection_unchanged_document PASSED
+  * test_change_detection_triggers_staged_proposals_without_direct_rule_mutation PASSED
+  * test_change_detection_timeout_records_error_history PASSED
+  * test_api_get_sources PASSED
+  * test_api_post_sources_check_success PASSED
+  * test_api_get_sources_history PASSED
+  * test_api_get_sources_status PASSED
+  * test_scheduler_thread_safety_no_duplicates PASSED
 
-Vite Production Build: Built in 329ms with 0 TypeScript errors
+Vite Production Build: Built in 335ms with 0 TypeScript errors
 ```
+
+---
+
+## 🌐 Feature 8: Real External Insurer Policy Source Integration
+- **Selected Source:** Centers for Medicare & Medicaid Services (CMS) Medicare Coverage Database (National Coverage Determinations & Clinical Guidelines).
+- **Official URL:** `https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?ncdid=372`
+- **Why CMS NCDs:** Authorized, publicly accessible government source; provides transparent healthcare determinations without paywalls or anti-bot blocks; compliant with ethical web crawling standards.
+- **Fingerprinting & Change Detection:**
+  - Computes SHA-256 content hashes.
+  - Normalizes dynamic HTML script nonces and query-string cache-busters so only substantive policy text changes trigger alerts.
+  - Unchanged checks log an audit entry and create 0 duplicate proposals.
+  - Changed checks route new policy updates through multimodal extraction and stage proposals in `pending_review`.
+  - Zero unapproved rule mutations occur without reviewer approval.
+- **Scheduler & Endpoints:**
+  - Thread-safe background monitor (`PolicyMonitoringScheduler`) preventing duplicate threads during reload.
+  - Endpoints: `GET /api/sources`, `POST /api/sources/check`, `GET /api/sources/history`, `GET /api/sources/status`, `GET/POST /api/settings/demo-mode`.

@@ -15,6 +15,8 @@ import {
   ExtractedDocumentResult,
   ProposedPolicyChange,
   ImpactPreviewResult,
+  OfficialPolicySource,
+  SourceCheckHistory,
 } from './types';
 
 const API_BASE = '/api';
@@ -375,3 +377,59 @@ export async function createCase(caseData: any): Promise<any> {
     item_name: caseData.items?.[0]?.name || 'Drug A',
   });
 }
+
+// -------------------------------------------------------------
+// Official External Policy Sources & Demo Mode (Feature 8)
+// -------------------------------------------------------------
+
+export async function fetchOfficialSources(): Promise<OfficialPolicySource[]> {
+  const res = await fetch(`${API_BASE}/sources`);
+  if (!res.ok) throw new Error('Failed to fetch official policy sources');
+  return res.json();
+}
+
+export async function checkOfficialSource(sourceId?: string): Promise<SourceCheckHistory> {
+  const res = await fetch(`${API_BASE}/sources/check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_id: sourceId }),
+  });
+  if (!res.ok) throw new Error('Failed to check official policy source');
+  return res.json();
+}
+
+export async function fetchSourceHistory(sourceId?: string): Promise<SourceCheckHistory[]> {
+  const url = sourceId ? `${API_BASE}/sources/history?source_id=${encodeURIComponent(sourceId)}` : `${API_BASE}/sources/history`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch source check history');
+  return res.json();
+}
+
+export async function fetchSourcesStatus(): Promise<{
+  total_sources: number;
+  connected_sources: number;
+  sources: OfficialPolicySource[];
+  latest_check?: SourceCheckHistory | null;
+  is_real_external_connection: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/sources/status`);
+  if (!res.ok) throw new Error('Failed to fetch sources status');
+  return res.json();
+}
+
+export async function fetchDemoMode(): Promise<{ demo_mode: boolean }> {
+  const res = await fetch(`${API_BASE}/settings/demo-mode`);
+  if (!res.ok) throw new Error('Failed to fetch demo mode setting');
+  return res.json();
+}
+
+export async function setDemoMode(demoMode: boolean): Promise<{ success: boolean; demo_mode: boolean }> {
+  const res = await fetch(`${API_BASE}/settings/demo-mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ demo_mode: demoMode }),
+  });
+  if (!res.ok) throw new Error('Failed to update demo mode');
+  return res.json();
+}
+

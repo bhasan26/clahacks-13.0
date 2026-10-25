@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 from datetime import date
 from app.domain.models import ProposedPolicyChange, PolicyDiff, Rule, RuleEffect
 from app.db.store import store
+from app.engine.matcher import match_proposal_to_rule
 
 
 def find_matching_existing_rule(
@@ -16,31 +17,11 @@ def find_matching_existing_rule(
 ) -> Optional[Rule]:
     """
     Finds the active baseline or prior version of the rule matching insurer,
-    plan, item target type and code.
+    plan, item target type and code using strict matching.
     """
-    p_ins = proposal.insurer_id.lower().replace("-", "").replace(" ", "")
-    p_code = proposal.target_code.upper().strip()
-    p_name = (proposal.target_name or "").lower().strip()
-
     matching: List[Rule] = []
     for r in all_rules:
-        r_ins = r.insurer_id.lower().replace("-", "").replace(" ", "")
-        # Insurer match or wildcard
-        if r.insurer_id != "*" and proposal.insurer_id != "*" and r_ins != p_ins:
-            continue
-
-        # Code match or alias match
-        r_code = r.target.code.upper().strip()
-        r_name = (r.target.name or "").lower().strip()
-        code_matched = (
-            r_code == p_code
-            or (p_code in r_code)
-            or (r_code in p_code)
-            or (p_name and p_name in r_name)
-            or (r_name and r_name in p_name)
-        )
-
-        if code_matched:
+        if match_proposal_to_rule(proposal, r):
             matching.append(r)
 
     if not matching:
@@ -70,18 +51,18 @@ def compute_policy_diff(
             existing_rule_id=None,
             existing_rule_version=None,
             previous_effect=None,
-            proposed_effect=proposal.proposed_effect.value,
+            proposed_effect=proposal.proposed_effect.value if proposal.proposed_effect else "pending_review",
             previous_effective_from=None,
             proposed_effective_from=str(proposal.effective_from) if proposal.effective_from else None,
             is_delay=False,
             is_cancellation=False,
-            diff_summary=f"New Policy Mandate: {proposal.target_name or proposal.target_code} ({proposal.proposed_effect.value.upper()}) effective {proposal.effective_from or 'upon announcement'}.",
+            diff_summary=f"New Policy Mandate: {proposal.target_name or proposal.target_code or 'Unspecified'} ({proposal.proposed_effect.value.upper() if proposal.proposed_effect else 'PENDING VERIFICATION'}) effective {proposal.effective_from or 'upon announcement'}.",
             change_category="new_rule",
         )
 
     # Prior rule found - analyze difference
     prev_eff = prior_rule.effect.value
-    new_eff = proposal.proposed_effect.value
+    new_eff = proposal.proposed_effect.value if proposal.proposed_effect else "pending_review"
     prev_date = prior_rule.effective_from
     new_date = proposal.effective_from
 

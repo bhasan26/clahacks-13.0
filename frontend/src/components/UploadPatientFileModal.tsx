@@ -122,7 +122,13 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
     try {
       const card = analysisResult.card;
       const clinical = analysisResult.clinical;
-      const firstItem = clinical.items[0] || { type: 'drug', code: 'DRUG-A', name: 'Prescribed Care' };
+
+      if (!clinical.items || clinical.items.length === 0) {
+        alert('No clinical procedure or drug items were detected. Please ensure your clinical order contains recognizable items.');
+        setIsSubmitting(false);
+        return;
+      }
+      const firstItem = clinical.items[0];
 
       const res = await uploadPatientFile({
         specialty: clinical.specialty,
@@ -197,6 +203,16 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
 
           {/* Main Body */}
           <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm">
+            {/* Privacy Safeguard Banner */}
+            <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl flex items-start gap-3">
+              <svg className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div className="text-xs text-amber-900 leading-relaxed">
+                <span className="font-bold">Privacy Safeguard & Synthetic Data Notice:</span> This hackathon environment processes synthetic patient test fixtures only. Uploaded documents are processed in-memory with PII-redaction safeguards and automated temporary buffer cleanup. Do not submit live unredacted Protected Health Information (PHI).
+              </div>
+            </div>
+
             {/* Upload Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Box 1: Insurance Details (Optional) */}

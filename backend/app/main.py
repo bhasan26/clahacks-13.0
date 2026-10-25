@@ -42,12 +42,15 @@ from app.domain.models import (
     InsurerConnectionInfo,
     InsurerUpdateEntry,
     ItemVerdict,
+    OfficialPolicySource,
     PolicyBulletin,
     PolicyDiff,
     ProposedPolicyChange,
     Rule,
+    SourceCheckHistory,
     utc_now,
 )
+from app.connectors.change_detector import check_source_for_changes
 from app.engine.checker import evaluate_case
 from app.intake.analyzer import (
     analyze_clinical_document,
@@ -763,4 +766,85 @@ def get_alert_draft_endpoint(alert_id: str):
         "draft_message": draft,
         "disclaimer": "Draft requires human review by hospital staff before sending. External automated transmission disabled.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Official External Insurer Policy Sources (Feature 8)
+# ---------------------------------------------------------------------------
+class CheckSourceRequest(BaseModel):
+    source_id: Optional[str] = None
+    override_content: Optional[str] = None
+    override_filename: Optional[str] = None
+
+
+class DemoModePayload(BaseModel):
+    demo_mode: bool
+
+
+@app.get("/api/sources", response_model=List[OfficialPolicySource])
+def list_sources_endpoint():
+    """Returns all configured official external insurer policy sources."""
+    return store.get_sources()
+
+
+@app.post("/api/sources/check", response_model=SourceCheckHistory)
+def check_source_endpoint(payload: Optional[CheckSourceRequest] = None):
+    """
+    Checks an official external source for changes.
+    Computes SHA-256 fingerprint; if changed, parses proposals and stages for human review.
+    """
+    source_id = payload.source_id if payload else None
+    sources = store.get_sources()
+    if source_id:
+        source = store.get_source(source_id)
+        if not source:
+            raise HTTPException(status_code=404, detail=f"Source {source_id} not found.")
+    elif sources:
+        source = sources[0]
+    else:
+        raise HTTPException(status_code=400, detail="No official sources configured.")
+
+    override_bytes = payload.override_content.encode("utf-8") if (payload and payload.override_content) else None
+    override_file = payload.override_filename if payload else None
+
+    history = check_source_for_changes(
+        source,
+        override_content=override_bytes,
+        override_filename=override_file,
+    )
+    return history
+
+
+@app.get("/api/sources/history", response_model=List[SourceCheckHistory])
+def get_source_history_endpoint(source_id: Optional[str] = None):
+    """Returns fingerprint check history for official policy sources."""
+    return store.get_source_history(source_id=source_id)
+
+
+@app.get("/api/sources/status")
+def get_sources_status_endpoint():
+    """Returns aggregate status of official external sources."""
+    sources = store.get_sources()
+    history = store.get_source_history()
+    return {
+        "total_sources": len(sources),
+        "connected_sources": len([s for s in sources if s.status == "connected"]),
+        "sources": sources,
+        "latest_check": history[0] if history else None,
+        "is_real_external_connection": any(s.is_real_external_source for s in sources),
+    }
+
+
+@app.get("/api/settings/demo-mode")
+def get_demo_mode_endpoint():
+    """Returns current demo mode setting."""
+    return {"demo_mode": store.demo_mode}
+
+
+@app.post("/api/settings/demo-mode")
+def set_demo_mode_endpoint(payload: DemoModePayload):
+    """Enables or disables synthetic demo mode."""
+    store.set_demo_mode(payload.demo_mode)
+    return {"success": True, "demo_mode": store.demo_mode}
+
 

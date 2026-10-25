@@ -372,6 +372,8 @@ export interface ImpactPreviewResult {
   unchanged_cases: number;
   cases: ImpactCaseItem[];
   simulation_timestamp: string;
+  is_demo_mode?: boolean;
+  notice?: string | null;
 }
 
 export interface DocumentPageInfo {
@@ -393,4 +395,35 @@ export interface ExtractedDocumentResult {
   diffs: PolicyDiff[];
   impact_preview?: ImpactPreviewResult | null;
   extracted_at: string;
+}
+
+export interface OfficialPolicySource {
+  source_id: string;
+  name: string;
+  insurer_name: string;
+  official_url: string;
+  policy_scope: string;
+  last_checked_at?: string | null;
+  last_changed_at?: string | null;
+  content_hash?: string | null;
+  status: 'active' | 'connected' | 'checking' | 'unchanged' | 'change_detected' | 'error';
+  latest_document_title?: string | null;
+  pending_proposal_ids: string[];
+  error_message?: string | null;
+  is_real_external_source: boolean;
+  source_type: string;
+}
+
+export interface SourceCheckHistory {
+  check_id: string;
+  source_id: string;
+  source_name?: string | null;
+  checked_at: string;
+  status: string;
+  content_hash?: string | null;
+  changed: boolean;
+  summary: string;
+  proposals_created: string[];
+  affected_claims_count: number;
+  error_message?: string | null;
 }
