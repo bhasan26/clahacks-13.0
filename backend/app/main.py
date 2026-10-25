@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Literal
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -31,14 +31,20 @@ if env_file.exists():
 
 from app.db.store import store
 from app.domain.models import (
+    Alert,
+    AlertTask,
     Case,
     CaseItem,
     CaseStatusType,
     Diagnosis,
+    ExtractedDocumentResult,
+    ImpactPreviewResult,
     InsurerConnectionInfo,
     InsurerUpdateEntry,
     ItemVerdict,
     PolicyBulletin,
+    PolicyDiff,
+    ProposedPolicyChange,
     Rule,
     utc_now,
 )
@@ -47,6 +53,13 @@ from app.intake.analyzer import (
     analyze_clinical_document,
     analyze_insurance_card,
     get_fallback_sample,
+)
+from app.intelligence import (
+    process_uploaded_document,
+    DocumentProcessingError,
+    extract_policies_with_gemini,
+    compute_policy_diff,
+    preview_claim_impact,
 )
 
 app = FastAPI(
@@ -496,3 +509,258 @@ def reset_demo(seed_demo: bool = Query(True, description="Seed mock demo cases")
     """Resets data. If seed_demo=True, loads 40 test cases for QA test runners."""
     store.reset_state(seed_demo=seed_demo)
     return {"success": True, "message": f"Demo state reset (seed_demo={seed_demo})."}
+
+
+# ---------------------------------------------------------
+# Multimodal AI Policy Intelligence
+# ---------------------------------------------------------
+class PreviewImpactPayload(BaseModel):
+    proposals: List[ProposedPolicyChange]
+
+
+class ApproveProposalPayload(BaseModel):
+    reviewer_notes: Optional[str] = None
+    edited_fields: Optional[Dict[str, Any]] = None
+
+
+class RejectProposalPayload(BaseModel):
+    reviewer_notes: Optional[str] = None
+
+
+@app.post("/api/policies/extract", response_model=ExtractedDocumentResult)
+async def extract_policy_document(request: Request):
+    """
+    Multimodal Policy Extraction:
+    1. Accepts PDF (selectable or scanned), images (PNG/JPG/WebP), or pasted text.
+    2. Enforces 10MB file limit and extracts page text / rendered previews.
+    3. Invokes Gemini to extract proposed policy rule changes.
+    4. Validates evidence quotations against original text.
+    5. Computes policy difference against currently active rules.
+    6. Simulates claim impact on hospital caseload.
+    7. Saves proposals for human review.
+    """
+    content_type = request.headers.get("content-type", "")
+    file_bytes: bytes = b""
+    filename: str = "policy_document"
+    mime_type: Optional[str] = None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        uploaded_file = form.get("file")
+        pasted_text = form.get("text")
+
+        if uploaded_file and hasattr(uploaded_file, "read"):
+            file_bytes = await uploaded_file.read()
+            filename = uploaded_file.filename or "uploaded_policy.pdf"
+            mime_type = uploaded_file.content_type
+        elif pasted_text:
+            text_str = str(pasted_text).strip()
+            file_bytes = text_str.encode("utf-8")
+            filename = "pasted_policy_notice.txt"
+            mime_type = "text/plain"
+        else:
+            raise HTTPException(status_code=400, detail="No file or text provided in form upload.")
+    else:
+        # JSON payload
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        if body.get("text"):
+            file_bytes = str(body["text"]).encode("utf-8")
+            filename = body.get("filename", "pasted_notice.txt")
+            mime_type = "text/plain"
+        elif body.get("file_b64"):
+            import base64
+            file_bytes = base64.b64decode(body["file_b64"])
+            filename = body.get("filename", "uploaded_doc.pdf")
+            mime_type = body.get("mime_type")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid request. Provide a file or text payload.")
+
+    try:
+        doc_data = process_uploaded_document(file_bytes, filename, mime_type)
+    except DocumentProcessingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {e}")
+
+    # Extract policy changes via Gemini
+    proposals, used_ai, ai_err = extract_policies_with_gemini(doc_data)
+
+    # Compute difference with existing active rules
+    diffs = [compute_policy_diff(p) for p in proposals]
+
+    # Pre-compute What-If claim impact preview
+    impact_preview = preview_claim_impact(proposals)
+
+    result = ExtractedDocumentResult(
+        document_id=doc_data["document_id"],
+        filename=doc_data["filename"],
+        file_type=doc_data["file_type"],
+        page_count=doc_data["page_count"],
+        pages_text=doc_data["pages"],
+        raw_text=doc_data["raw_text"],
+        proposals=proposals,
+        diffs=diffs,
+        impact_preview=impact_preview,
+        extracted_at=utc_now(),
+    )
+
+    store.save_extracted_document(result)
+    return result
+
+
+@app.post("/api/policies/preview-impact", response_model=ImpactPreviewResult)
+def preview_impact_endpoint(payload: PreviewImpactPayload):
+    """
+    What-If Claim Impact Simulator:
+    Calculates affected hospital claims without persisting any rules or side effects.
+    """
+    return preview_claim_impact(payload.proposals)
+
+
+@app.get("/api/policies/proposals", response_model=List[ProposedPolicyChange])
+def list_proposals():
+    """Lists all extracted policy proposals pending human review."""
+    return store.get_all_proposals()
+
+
+@app.get("/api/policies/proposals/{proposal_id}", response_model=ProposedPolicyChange)
+def get_proposal_endpoint(proposal_id: str):
+    """Retrieves a single policy change proposal."""
+    prop = store.get_proposal(proposal_id)
+    if not prop:
+        raise HTTPException(status_code=404, detail=f"Proposal {proposal_id} not found.")
+    return prop
+
+
+@app.get("/api/policies/documents/{doc_id}", response_model=ExtractedDocumentResult)
+def get_extracted_doc_endpoint(doc_id: str):
+    """Retrieves the extracted document text, rendered page previews, and proposals."""
+    doc = store.get_extracted_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found.")
+    return doc
+
+
+@app.post("/api/policies/proposals/{proposal_id}/approve")
+def approve_proposal_endpoint(
+    proposal_id: str,
+    payload: Optional[ApproveProposalPayload] = None,
+):
+    """
+    Human Approves Proposed Policy:
+    1. Applies any corrections from reviewer.
+    2. Saves new rule version into immutable store.
+    3. Automatically re-evaluates all affected open claims.
+    4. Publishes update entry to alerts feed and records audit log.
+    """
+    notes = payload.reviewer_notes if payload else None
+    edits = payload.edited_fields if payload else None
+    try:
+        rule, affected_cases = store.approve_proposal(
+            proposal_id,
+            reviewer_notes=notes,
+            edited_fields=edits,
+        )
+        return {
+            "success": True,
+            "message": f"Policy approved: Rule {rule.rule_id} v{rule.version} is now active.",
+            "rule": rule,
+            "affected_cases_count": len(affected_cases),
+            "affected_case_ids": affected_cases,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Approval failed: {e}")
+
+
+@app.post("/api/policies/proposals/{proposal_id}/reject")
+def reject_proposal_endpoint(
+    proposal_id: str,
+    payload: Optional[RejectProposalPayload] = None,
+):
+    """Human rejects proposed policy change."""
+    notes = payload.reviewer_notes if payload else None
+    try:
+        prop = store.reject_proposal(proposal_id, reviewer_notes=notes)
+        return {
+            "success": True,
+            "message": f"Proposal {proposal_id} rejected.",
+            "proposal": prop,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Explainable Action Center & Alerts (Phase 7)
+# ---------------------------------------------------------------------------
+class UpdateAlertTaskPayload(BaseModel):
+    status: Literal["open", "in_progress", "completed"] = "completed"
+    completed_by: Optional[str] = "Claims Officer"
+
+
+class AcknowledgeAlertPayload(BaseModel):
+    officer_note: Optional[str] = None
+
+
+@app.get("/api/alerts", response_model=List[Alert])
+def get_alerts_endpoint(status: Optional[str] = None):
+    """Returns alerts for affected hospital claims, newest first."""
+    return store.get_all_alerts(status=status)
+
+
+@app.get("/api/alerts/case/{case_id}", response_model=List[Alert])
+def get_case_alerts_endpoint(case_id: str):
+    """Returns all alerts for a specific claim."""
+    return store.get_alerts_for_case(case_id)
+
+
+@app.post("/api/alerts/{alert_id}/tasks/{task_id}")
+def update_alert_task_endpoint(alert_id: str, task_id: str, payload: UpdateAlertTaskPayload):
+    """Updates the administrative task status on an alert."""
+    alert = store.update_alert_task(
+        alert_id=alert_id,
+        task_id=task_id,
+        task_status=payload.status,
+        completed_by=payload.completed_by,
+    )
+    if not alert:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} or task {task_id} not found.")
+    return {"success": True, "alert": alert}
+
+
+@app.post("/api/alerts/{alert_id}/acknowledge")
+def acknowledge_alert_endpoint(alert_id: str, payload: Optional[AcknowledgeAlertPayload] = None):
+    """Marks an alert as acknowledged."""
+    note = payload.officer_note if payload else None
+    alert = store.acknowledge_alert(alert_id=alert_id, officer_note=note)
+    if not alert:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found.")
+    return {"success": True, "alert": alert}
+
+
+@app.post("/api/alerts/{alert_id}/draft")
+def get_alert_draft_endpoint(alert_id: str):
+    """Generates an administrative draft follow-up message for clinical staff."""
+    alert = store.alerts.get(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found.")
+
+    draft = alert.draft_message or (
+        f"Notice regarding Claim {alert.case_id}: Policy update for {alert.item_code} "
+        f"effective {alert.effective_date or 'soon'}. Please review the attached coverage rule "
+        f"({alert.rule_id}) and verify any required documentation or prior authorization before submission."
+    )
+    return {
+        "success": True,
+        "alert_id": alert_id,
+        "case_id": alert.case_id,
+        "draft_message": draft,
+        "disclaimer": "Draft requires human review by hospital staff before sending. External automated transmission disabled.",
+    }
+

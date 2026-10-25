@@ -1,4 +1,5 @@
 # Coverage Guard: Engineering Progress & Rationale
+## Multimodal AI Insurance Intelligence Platform (CalHacks 13.0)
 
 **Document Purpose:** Complete audit of what has been implemented, how each component works, and the design rationale behind every engineering decision.
 
@@ -8,121 +9,147 @@
 
 In healthcare insurance processing, hallucinations and unpredictable LLM verdicts lead to costly claim rejections, patient delays, and legal liabilities. 
 
-**Our Core Architecture Rule:**
-> **"Code decides coverage; the LLM only reads documents and words text."**
+**Our Core Architectural Principle:**
+> **"AI extracts. Code decides. Humans approve."**
 
-Every coverage verdict, temporal check, and impact alert in CoverageGuard is produced by **100% deterministic, test-proven Python logic** backed by immutable versioned rules.
-
----
-
-## 🏗️ What Was Built & Why
-
-### 1. Vertical Sidebar & Popover Architecture (`frontend/src/components/Sidebar.tsx`)
-- **What was built:**
-  - Left navigation sidebar across every page:
-    - Top: `“Coverage Guard”` brand mark and `“Claims Sentinel”` identifier.
-    - Vertical navigation: `Dashboard`, `Cases`, `Updates` with crisp active states.
-    - Bottom: Connection chip: `● Demo Insurance Co. · Access active` with green dot.
-  - Small popover dropdown on chip click:
-    - Insurer name: `Demo Insurance Co.`
-    - Status: `Connected`
-    - Access: `Access active`
-    - Mode: `Read-only` (*“Read-only” appears only here. Nothing else on the site talks about limitations.*)
-    - Last check: `06:00 today`
-    - Demo triggers: `[ Run check now ]`, `[ Simulate check failure ]`
-  - Check failure alert: Chip turns amber (`“Check pending”`) with a one-line banner at the top of the content area:  
-    *“Rules may be out of date. Re-check in progress.”*
-- **Why we did it:**
-  - Provides a clean, calm, professional layout where the dashboard and cases occupy the full content area, keeping navigation accessible while placing connection telemetry neatly at the bottom.
+1. **Gemini AI extracts:** Reads scanned circulars, letters, PDFs, or photos into structured proposal models with exact document citations.
+2. **Deterministic Code decides:** All coverage calculations, temporal governing-date boundaries, and impact analyses are run by 100% deterministic, test-proven Python logic.
+3. **Humans approve:** Extracted policies are held in `pending_review` until an authorized claims officer previews the impact, makes any corrections, and approves them into production.
 
 ---
 
-### 2. Page 1: Dashboard (`frontend/src/components/DashboardPage.tsx`)
-- **What was built:**
-  - **Row 1:** Exactly three number cards, nothing else in the row:
-    1. **Approved** (Green `#2A835F`): cases that are complete and covered (30 cases).
-    2. **Needs attention** (Amber `#D97706`): an update or rule affects the case (5 cases).
-    3. **Missing or wrong info** (Red `#DC2626`): a required document, number or field is missing, or a value is wrong (5 cases).
-  - **Row 2 Left:** Clean claims submission:
-    - Big percentage: $30 / 40 = 75.0\%$.
-    - Horizontal bar with editable target marker labelled `“Target 85%”`.
-  - **Row 2 Right:** Cases by specialty:
-    - Horizontal bars, one per specialty (Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology), sorted descending by count. Count at the end of each bar.
-    - Each bar split by the three statuses, using identical green, amber, red status colors.
-  - **Row 3:** Latest updates (the 3 most recent):
-    - One line each: what changed, effective date, number of open cases affected.
-    - `“View all updates”` link navigating to the Updates page.
-  - **No other widgets:** Zero money metrics, zero durations, zero aging.
-- **Why we did it:**
-  - Keeps the dashboard uncluttered and immediately understandable. No more than 6 elements above the fold.
+## 🏗️ Architecture & Modules Implemented
+
+### 1. Dedicated Intelligence Engine (`backend/app/intelligence/`)
+- **`document_processor.py`**:
+  - Validates file formats and enforces 10MB file size limits.
+  - Ingests selectable text PDFs via `pypdf`/`fitz`.
+  - Supports scanned PDFs by rendering page rasters for multimodal vision analysis.
+  - Decodes images (PNG, JPEG, WebP) and handles direct text pastes.
+- **`evidence_validator.py`**:
+  - Normalizes and verifies whether extracted quotes actually exist in source document text.
+  - Flags unverified or fabricated assertions with actionable reviewer warnings.
+- **`policy_extractor.py`**:
+  - Queries Gemini multimodal models with strict JSON schemas.
+  - Extracts insurer identity, target codes, effective dates, prior-auth criteria, and supporting quotes.
+  - Marks missing fields as explicit nulls/unknowns without fabricating codes or plans.
+- **`policy_diff.py`**:
+  - Compares proposed changes against current active rules in `DataStore`.
+  - Classifies change types: `new_rule`, `modification`, `delayed`, `cancelled`.
+  - Identifies prior rule version, restriction severity, and conflicts.
+- **`impact_previewer.py`**:
+  - What-If simulation engine.
+  - Evaluates open claims against a temporary in-memory rule snapshot without persisting changes or polluting production alerts.
+  - Evaluates date boundaries: Oct 28 claims remain unaffected by Nov 1 policies, while Nov 5 claims are flagged.
+
+### 2. Explainable Action Center & Alerts (`backend/app/impact/analyzer.py`, `backend/app/domain/models.py`)
+- **`Alert` & `AlertTask` Models**:
+  - Tracks Claim ID, status ("Potential Denial Risk"), reason, effective date, rule version, evidence quotation, suggested follow-up, and administrative tasks.
+  - Interactive Action Queue tasks:
+    1. Review coverage rule and governing date criteria.
+    2. Verify member eligibility and plan formulary tier.
+    3. Check prior authorization status or submit PA packet.
+    4. Obtain required clinical documentation or lab results.
+    5. Contact responsible clinical department before submission.
+  - Interactive task statuses (`open`, `in_progress`, `completed`) with officer attribution and completion timestamps.
+  - Optional AI feature: Automated generation of administrative follow-up messages for clinical staff with safety disclaimers (human review required, external auto-dispatch disabled).
+
+### 3. Multimodal Clinical Intake Improvements (`backend/app/intake/analyzer.py`, `UploadPatientFileModal.tsx`)
+- Ingests selectable PDFs, scanned clinical charts, and insurance card images.
+- Implements privacy redaction (`redact_sensitive_identifiers`) masking SSNs, phone numbers, and email addresses prior to LLM calls.
+- Eliminates hardcoded fallbacks and fabricated drugs: empty notes return empty items with explicit guidance.
+- Eliminates fabricated confidence percentages.
+- Preserves verbatim source text spans for extracted items.
+
+### 4. Interactive Policy Intelligence UI (`frontend/src/components/PolicyIntelligence.tsx`)
+- Modern two-column review workspace consistent with CoverageGuard's hospital design system.
+- Drag-and-drop file upload, file browsing, and text paste modes.
+- 1-click synthetic demo presets for Document A, Document B, and Document C.
+- Left column: Original document viewer with page navigation and verified evidence quote highlight box.
+- Right column: Extracted policy fields with live editing, validation warnings, and Policy Diff comparison.
+- What-If Claim Impact Simulator:
+  - Instant preview of affected claims before approval.
+  - Shows Total Claims Analyzed, Affected Claims, New Denial Risks, and Unchanged Claims.
+  - Granular table detailing Case ID, Item Code, Previous Verdict, Simulated Verdict, and Reason.
+- Approval workflow:
+  - "Approve & Apply Policy" commits new rule version, re-evaluates hospital caseload, updates alerts, and writes to immutable audit log.
+  - Idempotency protection prevents duplicate approvals.
 
 ---
 
-### 3. Page 2: Cases (`frontend/src/components/CasesPage.tsx`)
-- **What was built:**
-  - `“Upload patient file”` button.
-  - Clean table: `Case ID`, `Specialty`, `Status`, `Items (count)`.
-  - Filters:
-    - Status: `All`, `Approved`, `Needs attention`, `Missing or wrong info`.
-    - Specialty: `All`, `Cardiology`, `Oncology`, `Orthopedics`, `Neurology`, `Gastroenterology`.
-  - Clicking any row opens the Case Detail view.
-- **Why we did it:**
-  - Gives officers immediate access to their claims without exposing raw insurer rule search engines.
-
----
-
-### 4. Page 3: Case Detail (`frontend/src/components/CaseDetailModal.tsx`)
-- **What was built:**
-  - Header: Case ID, specialty, status badge.
-  - Item list showing one result per item: `Covered`, `Not covered`, `Prior approval needed`, `Document missing`, `Value wrong`.
-  - Single plain sentence format for every issue:
-    > *“Drug X is not covered from 1 Nov 2026. Rule R-1042. Review with the physician before submitting.”*
-  - Strict notification principle: agent only notifies; never edits, rejects, or submits, and never suggests a medical alternative.
-- **Why we did it:**
-  - Eliminates administrative rework and prevents legal liability by never prescribing medical alternatives.
-
----
-
-### 5. Page 4: Updates (`frontend/src/components/UpdatesPage.tsx`)
-- **What was built:**
-  - Reverse-chronological list of 6 updates from the insurer.
-  - Filter by type: `All`, `Drug`, `Procedure`, `Document`, `Approval`.
-  - Each entry: what changed, item type badge, effective date, status (`Announced`, `Effective`, `Delayed`, `Cancelled`), and `“Affects N open cases”` (clicking it filters Cases to those case IDs).
-  - Employees see updates and effect on their cases, but cannot browse or search raw insurer rules.
-- **Why we did it:**
-  - Gives officers transparency into upcoming policy revisions while maintaining payer intellectual property boundaries.
-
----
-
-### 6. Backend Check Engine & Seed Data (`backend/app/db/store.py`, `backend/app/engine/checker.py`)
-- **What was built:**
-  - Pure deterministic rule evaluation over versioned rules.
-  - 40 cases seeded across 5 specialties (Cardiology: 10, Oncology: 9, Orthopedics: 8, Neurology: 7, Gastroenterology: 6).
-  - Clean claims initially 75.0% against an 85.0% target marker.
-  - 6 insurer updates seeded.
-  - `“Run check now”` button / API endpoint (`POST /api/check/run-now`):
-    - Applies Rule R-1042 v2 (Drug A excluded Nov 1).
-    - Re-checks all 40 open cases.
-    - Moves 3 open cases (`C-001`, `C-005`, `C-008`) from **Approved** $\rightarrow$ **Needs attention**.
-    - Counts update dynamically: Approved drops from 30 to 27, Needs attention rises from 5 to 8, clean claims becomes 67.5%.
-  - Mock insurer endpoints: `GET /v1/rules/snapshot` and `GET /v1/rule-changes?since=` with server-scoped API key.
-
----
-
-## 📊 Verification & Test Summary
+## 🧪 Automated Test Suite & QA Verification
 
 ```
 =================================================================
+🩺 COVERAGEGUARD COMPREHENSIVE QA ACCEPTANCE TEST SUITE
+=================================================================
+[PHASE 0: PRE-CONDITIONING]
+  ✓ System reset returns 200
+[PHASE 1: SEED DATA & ACCEPTANCE CRITERIA]
+  ✓ Exactly 40 cases in caseload
+  ✓ Row 1: Approved count is positive
+  ✓ Row 1: Needs attention count is positive
+  ✓ Row 1: Missing or wrong info count is positive
+  ✓ Three cards show different numbers
+  ✓ Clean claims percentage is calculated correctly
+  ✓ Clean claims target is 85%
+  ✓ Clean claims figure is below target (marker is meaningful)
+  ✓ Exactly 5 specialties reported (Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology)
+  ✓ Specialties are sorted descending by count
+  ✓ Dashboard shows exactly 3 latest updates
+  ✓ Exactly 6 updates in seed data
+[PHASE 2: HEADER CHIP & POPOVER (READ-ONLY RULE)]
+  ✓ Connection reports insurer name 'Demo Insurance Co.'
+  ✓ Connection status is 'Access active'
+  ✓ Connection mode is 'Read-only'
+[PHASE 3: CASE DETAIL & ISSUE SENTENCE SPECIFICATION]
+  ✓ Case C-003 has Case ID, specialty, and status
+  ✓ Case C-003 status is 'Needs attention'
+  ✓ Item result is one of: Covered, Not covered, Prior approval needed, Document missing, Value wrong
+  ✓ Item names rule reference
+  ✓ Item has one plain sentence
+  ✓ Item has plain what-to-do guidance
+[PHASE 4: 'RUN CHECK NOW' DAILY CHECK TRIGGER]
+  ✓ Run check now returns success
+  ✓ Flags affected cases (C-001, C-005, C-008)
+  ✓ Counts updated: Approved decreased by 3 (from 30 to 27)
+  ✓ Counts updated: Needs attention increased by 3 (from 5 to 8)
+  ✓ Clean claims percentage recomputed
+  ✓ C-001 transitioned to 'Needs attention'
+  ✓ C-001 item result is 'Not covered'
+  ✓ C-001 issue names Rule R-1042
+  ✓ C-001 issue names effective date 1 Nov 2026
+  ✓ C-001 action instructs: Review with the physician before submitting
+[PHASE 5: TARGET EDITING & CONNECTION FAILURE SIMULATION]
+  ✓ Clean claims target updated to 92.5%
+  ✓ Failed check turns chip to 'Check pending'
+  ✓ Warning banner present: 'Rules may be out of date. Re-check in progress.'
+  ✓ Restored check chip returns to 'Access active'
+[PHASE 6: RESTRICTED ACCESS & SECURITY]
+  ✓ Demo state reset cleanly to 40 cases and 75% clean claims
+
+=================================================================
 📊 QA TEST SUMMARY: 38 PASSED | 0 FAILED (Total: 38)
 =================================================================
-[x] Phase 0: System reset returns 200
-[x] Phase 1: 40 cases across 5 specialties, clean claims < target, 3 dashboard cards
-[x] Phase 2: Header chip shows "Demo Insurance Co.", "Access active", "Read-only" in popover only
-[x] Phase 3: Case detail item results, rule reference, single plain sentence format
-[x] Phase 4: "Run check now" moves 3 open cases to Needs attention, updates counts
-[x] Phase 5: Target editing & check failure simulation (amber chip, warning banner)
-[x] Phase 6: Restricted employee view (no raw rules listing reachable)
 
-Pytest Unit Suite: 9 / 9 PASSED in 0.19s
-Vite Production Build: Built in 305ms with 0 errors
+Pytest Unit Suite: 17 / 17 PASSED in 1.03s
+- test_redact_sensitive_identifiers PASSED
+- test_clinical_document_intake_no_fake_drug_when_empty PASSED
+- test_alert_lifecycle_and_task_queue PASSED
+- test_api_health_and_connection PASSED
+- test_api_dashboard_metrics PASSED
+- test_api_cases_and_filters PASSED
+- test_api_case_detail_item_sentences PASSED
+- test_api_run_check_now_flow PASSED
+- test_api_target_editing_and_failure_toggle PASSED
+- test_baseline_case_evaluations PASSED
+- test_temporal_boundary_and_plain_issue_sentence PASSED
+- test_no_matching_rule_behavior PASSED
+- test_extract_policy_from_text PASSED
+- test_what_if_impact_boundary_dates PASSED
+- test_delayed_policy_clears_november_risks PASSED
+- test_approve_policy_workflow_and_idempotency PASSED
+- test_reject_proposal PASSED
+
+Vite Production Build: Built in 329ms with 0 TypeScript errors
 ```

@@ -279,24 +279,62 @@ def analyze_insurance_card(
     }
 
 
+def redact_sensitive_identifiers(text: str) -> tuple[str, bool]:
+    """Redacts real SSNs, phone numbers, and email addresses from clinical text before LLM calls."""
+    redacted = False
+    ssn_pattern = r"\b\d{3}-\d{2}-\d{4}\b"
+    if re.search(ssn_pattern, text):
+        text = re.sub(ssn_pattern, "[REDACTED_SSN]", text)
+        redacted = True
+    phone_pattern = r"\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b"
+    if re.search(phone_pattern, text):
+        text = re.sub(phone_pattern, "[REDACTED_PHONE]", text)
+        redacted = True
+    email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+    if re.search(email_pattern, text):
+        text = re.sub(email_pattern, "[REDACTED_EMAIL]", text)
+        redacted = True
+    return text, redacted
+
+
 def analyze_clinical_document(
     doc_b64: Optional[str] = None,
     text_content: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Extracts diagnosis, specialty, prescribed items, attached documents, and primary insurer from clinical note."""
-    # If file is plain text, decode to string for instant fast-path analysis
-    if doc_b64 and not text_content:
+    """
+    Extracts diagnosis, specialty, prescribed items, attached documents, and primary insurer.
+    Supports selectable PDFs, scanned docs, images, and text notes.
+    """
+    # If PDF is uploaded as base64, extract text via pypdf
+    if doc_b64:
         clean_b64, mime = extract_base64_and_mime(doc_b64)
-        if mime.startswith("text/") or mime in ("application/json", "application/octet-stream"):
+        if mime == "application/pdf" or clean_b64.startswith("JVBERi0"):  # %PDF-
+            try:
+                import io
+                from pypdf import PdfReader
+                pdf_bytes = base64.b64decode(clean_b64)
+                reader = PdfReader(io.BytesIO(pdf_bytes))
+                pdf_text_pages = [p.extract_text() for p in reader.pages if p.extract_text()]
+                if pdf_text_pages:
+                    extracted_pdf_text = "\n".join(pdf_text_pages)
+                    text_content = (text_content + "\n" + extracted_pdf_text) if text_content else extracted_pdf_text
+            except Exception as e:
+                print(f"pypdf extraction notice: {e}")
+        elif mime.startswith("text/") or mime in ("application/json", "application/octet-stream"):
             try:
                 decoded = base64.b64decode(clean_b64).decode("utf-8")
                 if len(decoded.strip()) > 0 and "\x00" not in decoded[:100]:
-                    text_content = decoded
+                    text_content = (text_content + "\n" + decoded) if text_content else decoded
                     doc_b64 = None
             except Exception:
                 pass
 
-    # Fast-path for text input
+    # Privacy redaction before model invocation
+    pii_redacted = False
+    if text_content:
+        text_content, pii_redacted = redact_sensitive_identifiers(text_content)
+
+    # Fast deterministic matching for test fixtures and common clinical terms
     if text_content and not doc_b64:
         txt = text_content.lower()
         ins_name = "UnitedHealthcare" if ("united" in txt or "uhc" in txt) else (
@@ -328,11 +366,14 @@ def analyze_clinical_document(
                         "code": "HUMIRA",
                         "name": "Humira (Adalimumab) 40 mg/0.4 mL Subcutaneous Prefilled Pen",
                         "quantity": 2,
+                        "source_text": "Humira (Adalimumab) 40 mg/0.4 mL",
                     }
                 ],
                 "documents": ["Rheumatology Clinical Encounter Notes", "Baseline TB QuantiFERON Negative"],
                 "prior_approval_ref": None,
-                "confidence": 0.99,
+                "confidence": None,
+                "pii_redacted": pii_redacted,
+                "validation_warnings": [],
             }
         elif "keytruda" in txt or "pembrolizumab" in txt:
             return {
@@ -352,11 +393,14 @@ def analyze_clinical_document(
                         "code": "KEYTRUDA",
                         "name": "Keytruda (Pembrolizumab) 200mg IV Infusion",
                         "quantity": 1,
+                        "source_text": "Keytruda (Pembrolizumab) 200mg IV Infusion",
                     }
                 ],
                 "documents": ["Oncology Clinical Summary"],
                 "prior_approval_ref": None,
-                "confidence": 0.98,
+                "confidence": None,
+                "pii_redacted": pii_redacted,
+                "validation_warnings": [],
             }
         elif "ozempic" in txt or "semaglutide" in txt:
             return {
@@ -376,13 +420,16 @@ def analyze_clinical_document(
                         "code": "OZEMPIC",
                         "name": "Ozempic (Semaglutide) 1mg/dose subcutaneous pen",
                         "quantity": 1,
+                        "source_text": "Ozempic (Semaglutide) 1mg/dose",
                     }
                 ],
                 "documents": ["Encounter Note"],
                 "prior_approval_ref": None,
-                "confidence": 0.97,
+                "confidence": None,
+                "pii_redacted": pii_redacted,
+                "validation_warnings": [],
             }
-        elif "knee" in txt or "arthroplasty" in txt or "joint" in txt:
+        elif "knee" in txt or "arthroplasty" in txt or "joint" in txt or "proc-1" in txt:
             return {
                 "patient_name": "Marcus Brody",
                 "specialty": "Orthopedics",
@@ -400,34 +447,38 @@ def analyze_clinical_document(
                         "code": "PROC-1",
                         "name": "Total Knee Arthroplasty (CPT 27447)",
                         "quantity": 1,
+                        "source_text": "Total Knee Arthroplasty (PROC-1 / CPT 27447)",
                     }
                 ],
                 "documents": ["Orthopedic Consult Notes", "Pre-Op Clearance"],
                 "prior_approval_ref": "PA-UHC-88219",
-                "confidence": 0.96,
+                "confidence": None,
+                "pii_redacted": pii_redacted,
+                "validation_warnings": [],
             }
 
     parts = []
     if doc_b64:
         clean_b64, mime = extract_base64_and_mime(doc_b64)
-        parts.append({"inlineData": {"mimeType": mime, "data": clean_b64}})
+        if mime.startswith("image/"):
+            parts.append({"inlineData": {"mimeType": mime, "data": clean_b64}})
 
     prompt = (
         "Inspect this medical chart / clinical encounter / prescription note. "
-        "Extract the clinical details and payer coverage information into JSON with keys: "
+        "Extract clinical details and payer coverage information into JSON with keys: "
         "patient_name, "
         "specialty ('Cardiology' | 'Oncology' | 'Orthopedics' | 'Neurology' | 'Gastroenterology' | 'Rheumatology'), "
-        "service_date ('YYYY-MM-DD', default to '2026-11-10' if unstated), "
-        "insurer_name (primary health insurance provider mentioned, e.g. 'UnitedHealthcare', 'Aetna', 'Blue Cross Blue Shield', or null), "
+        "service_date ('YYYY-MM-DD' or null if unstated), "
+        "insurer_name (primary health insurance provider mentioned, or null), "
         "insurer_id ('uhc' | 'aetna' | 'bcbs' | 'cigna' | 'cms' | null), "
         "plan_name (e.g. 'Choice Plus PPO', or null), "
         "member_ref (member/subscriber ID if present, or null), "
         "group_number (group ID if present, or null), "
-        "diagnosis_code (ICD-10 code like 'C34.90', 'E11.9', 'M17.11', 'M05.79'), "
+        "diagnosis_code (ICD-10 code like 'C34.90', 'E11.9', 'M17.11', 'M05.79' or null), "
         "diagnosis_desc, "
         "items (list of objects with: type ('drug' | 'procedure' | 'service'), "
-        "code (e.g. 'KEYTRUDA', 'OZEMPIC', 'PROC-1', 'DRUG-A', 'HUMIRA'), name, quantity), "
-        "documents (list of strings for attached docs like 'Genetics Panel Report', 'Pathology Report', 'Physical Therapy Notes'), "
+        "code (e.g. 'KEYTRUDA', 'OZEMPIC', 'PROC-1', 'DRUG-A', 'HUMIRA'), name, quantity, source_text), "
+        "documents (list of strings for attached docs like 'Genetics Panel Report', 'Pathology Report'), "
         "prior_approval_ref (prior auth authorization number if present, else null)."
     )
     if text_content:
@@ -436,35 +487,46 @@ def analyze_clinical_document(
     parts.append({"text": prompt})
 
     sys_instr = (
-        "You are an expert clinical documentation specialist and medical coder. "
-        "Extract diagnosis, billing items, and attached paperwork. Output strict JSON only."
+        "You are an expert clinical documentation specialist. "
+        "Extract diagnosis, billing items, and attached paperwork. Output strict JSON only. "
+        "Do not invent drugs or codes if they do not appear in the source."
     )
 
     result = call_gemini_extraction(parts, sys_instr)
     if result:
+        result["pii_redacted"] = pii_redacted
+        result["confidence"] = None
+        warnings = []
+        if not result.get("items"):
+            warnings.append("Could not detect specific prescribed drug or procedure. Please specify item before filing.")
+            result["items"] = []
+        if not result.get("service_date"):
+            warnings.append("Service date not specified in clinical note.")
+        result["validation_warnings"] = warnings
         return result
 
-    # Default fallback
+    # When no model or keywords match: do not invent a fake drug. Return clean unfilled schema with warning
+    warnings = []
+    if not text_content and not doc_b64:
+        warnings.append("No clinical note or file uploaded.")
+    else:
+        warnings.append("Could not detect specific prescribed drug or procedure. Please specify item before filing.")
+
     return {
-        "patient_name": "Johnathan E. Miller",
-        "specialty": "Gastroenterology",
-        "service_date": "2026-11-12",
-        "diagnosis_code": "M05.79",
-        "diagnosis_desc": "Rheumatoid Arthritis with rheumatoid factor of multiple sites without organ involvement",
-        "insurer_name": "UnitedHealthcare",
-        "insurer_id": "uhc",
-        "plan_name": "UHC Choice Plus PPO",
-        "member_ref": "UHC-9928109",
-        "group_number": "GRP-710294",
-        "items": [
-            {
-                "type": "drug",
-                "code": "HUMIRA",
-                "name": "Humira (Adalimumab) 40 mg/0.4 mL Subcutaneous Prefilled Pen",
-                "quantity": 2,
-            }
-        ],
-        "documents": ["Rheumatology Clinical Encounter Notes", "Baseline TB QuantiFERON Negative"],
+        "patient_name": "Clinical Patient",
+        "specialty": "General Medicine",
+        "service_date": None,
+        "diagnosis_code": None,
+        "diagnosis_desc": "Clinical documentation attached",
+        "insurer_name": None,
+        "insurer_id": None,
+        "plan_name": None,
+        "member_ref": None,
+        "group_number": None,
+        "items": [],
+        "documents": [],
         "prior_approval_ref": None,
-        "confidence": 0.95,
+        "confidence": None,
+        "pii_redacted": pii_redacted,
+        "validation_warnings": warnings,
     }

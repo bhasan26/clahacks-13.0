@@ -9,16 +9,19 @@ Matches all user specifications:
 """
 
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
 
 from app.domain.models import (
+    Alert,
     Case,
     CaseItem,
     CaseStatusType,
     Diagnosis,
+    ExtractedDocumentResult,
     InsurerConnectionInfo,
     InsurerUpdateEntry,
     PolicyBulletin,
+    ProposedPolicyChange,
     Rule,
     RuleCategory,
     RuleEffect,
@@ -35,6 +38,9 @@ class DataStore:
         self.bulletins: Dict[str, PolicyBulletin] = {}
         self.cases: Dict[str, Case] = {}
         self.updates: List[InsurerUpdateEntry] = []
+        self.proposals: Dict[str, ProposedPolicyChange] = {}
+        self.extracted_documents: Dict[str, ExtractedDocumentResult] = {}
+        self.alerts: Dict[str, Alert] = {}
         self.audit_log: List[dict] = []
         self.clean_claims_target: float = 85.0  # Editable by admin
         self.is_check_failed: bool = False
@@ -59,6 +65,8 @@ class DataStore:
         """Purges all demo entries and caseload cases."""
         self.cases.clear()
         self.updates.clear()
+        self.proposals.clear()
+        self.extracted_documents.clear()
         self.record_audit("DEMO_ENTRIES_CLEARED", {"cases_count": 0}, actor="claims-officer")
 
     def reset_state(self, seed_demo: bool = False):
@@ -67,6 +75,8 @@ class DataStore:
         self.bulletins.clear()
         self.cases.clear()
         self.updates.clear()
+        self.proposals.clear()
+        self.extracted_documents.clear()
         self.audit_log.clear()
         self.clean_claims_target = 85.0
         self.is_check_failed = False
@@ -676,6 +686,279 @@ class DataStore:
             if bid in clean_id or clean_id in bid:
                 return b
         return None
+
+    # -------------------------------------------------------------
+    # Multimodal Policy Proposals & Human Review Lifecycle
+    # -------------------------------------------------------------
+    def save_proposal(self, proposal: ProposedPolicyChange):
+        """Saves a proposed policy change pending human review."""
+        self.proposals[proposal.proposal_id] = proposal
+
+    def get_proposal(self, proposal_id: str) -> Optional[ProposedPolicyChange]:
+        return self.proposals.get(proposal_id)
+
+    def get_all_proposals(self) -> List[ProposedPolicyChange]:
+        return list(self.proposals.values())
+
+    def save_extracted_document(self, doc_result: ExtractedDocumentResult):
+        self.extracted_documents[doc_result.document_id] = doc_result
+        for p in doc_result.proposals:
+            self.save_proposal(p)
+
+    def get_extracted_document(self, doc_id: str) -> Optional[ExtractedDocumentResult]:
+        return self.extracted_documents.get(doc_id)
+
+    def approve_proposal(
+        self,
+        proposal_id: str,
+        reviewer_notes: Optional[str] = None,
+        edited_fields: Optional[dict] = None,
+    ) -> Tuple[Rule, List[str]]:
+        """
+        Human reviewer approves a proposed policy change:
+        1. Validates and incorporates any reviewer corrections.
+        2. Clones/increments rule version into active rules.
+        3. Re-evaluates caseload and updates claim risk determinations.
+        4. Emits insurer update entry and records immutable audit log.
+        """
+        proposal = self.proposals.get(proposal_id)
+        if not proposal:
+            raise ValueError(f"Proposal {proposal_id} not found.")
+
+        # Idempotency check: if already approved, return without creating duplicate rules
+        if proposal.review_state == "approved" and proposal.resulting_rule_id:
+            existing_rule_key = f"{proposal.resulting_rule_id}_v{proposal.resulting_rule_version or 1}"
+            return self.rules.get(existing_rule_key) or list(self.rules.values())[0], []
+
+        # Apply any reviewer corrections before committing
+        if edited_fields:
+            if "effective_from" in edited_fields and edited_fields["effective_from"]:
+                try:
+                    proposal.effective_from = datetime.strptime(str(edited_fields["effective_from"]), "%Y-%m-%d").date()
+                except Exception:
+                    pass
+            if "proposed_effect" in edited_fields and edited_fields["proposed_effect"]:
+                proposal.proposed_effect = RuleEffect(edited_fields["proposed_effect"])
+            if "target_code" in edited_fields and edited_fields["target_code"]:
+                proposal.target_code = str(edited_fields["target_code"]).strip()
+            if "target_name" in edited_fields and edited_fields["target_name"]:
+                proposal.target_name = str(edited_fields["target_name"]).strip()
+            if "policy_title" in edited_fields and edited_fields["policy_title"]:
+                proposal.policy_title = str(edited_fields["policy_title"]).strip()
+
+        # Find existing rule to version or create new
+        p_code = proposal.target_code.upper().strip()
+        matching_rules = [
+            r for r in self.rules.values()
+            if r.target.code.upper().strip() == p_code
+            and (r.insurer_id == "*" or r.insurer_id == proposal.insurer_id)
+        ]
+
+        if matching_rules:
+            prior_rule = sorted(matching_rules, key=lambda r: r.version, reverse=True)[0]
+            rule_id = prior_rule.rule_id
+            new_version = prior_rule.version + 1
+            prior_rule.status = RuleStatus.SUPERSEDED
+        else:
+            rule_id = proposal.policy_reference or f"R-{p_code}"
+            new_version = 1
+
+        rule_cat = RuleCategory.DRUG if proposal.target_type == "drug" else (
+            RuleCategory.PROCEDURE if proposal.target_type == "procedure" else RuleCategory.SERVICE
+        )
+
+        eff_date = proposal.effective_from or date(2026, 11, 1)
+
+        new_rule = Rule(
+            rule_id=rule_id,
+            version=new_version,
+            insurer_id=proposal.insurer_id,
+            plan_ids=proposal.plan_ids or ["*"],
+            category=rule_cat,
+            target=Target(
+                type=proposal.target_type,
+                code=proposal.target_code,
+                name=proposal.target_name or proposal.target_code,
+            ),
+            effect=proposal.proposed_effect,
+            conditions=proposal.conditions,
+            status=RuleStatus.EFFECTIVE if proposal.change_type != "cancelled" else RuleStatus.CANCELLED,
+            effective_from=eff_date,
+            effective_to=proposal.effective_to,
+            source_ref=f"approved-doc:{proposal.document_name}",
+            source_title=proposal.policy_title,
+            bulletin_summary=f"{proposal.policy_title} (Approved by reviewer).",
+            action_guidance=[f"Review requirements for {proposal.target_name or proposal.target_code} under policy {rule_id}."],
+        )
+        self.rules[f"{new_rule.rule_id}_v{new_rule.version}"] = new_rule
+
+        # Update policy bulletin for instant clinical citation review
+        bulletin_status = "Active / Revised" if new_version > 1 else "Active / Announced"
+        if proposal.change_type == "delayed":
+            bulletin_status = "Delayed Effective Date"
+
+        self.bulletins[rule_id] = PolicyBulletin(
+            rule_id=rule_id,
+            title=proposal.policy_title,
+            insurer_name=proposal.insurer_name,
+            effective_date=eff_date.strftime("%d %b %Y"),
+            last_reviewed=utc_now().strftime("%d %b %Y"),
+            status=bulletin_status,
+            policy_type=f"{proposal.target_type.title()} Coverage Policy Mandate",
+            summary=f"Official policy mandate extracted from '{proposal.document_name}' and approved by hospital reviewer. Quotation: \"{proposal.supporting_quote}\"",
+            coverage_criteria=[
+                f"Applies to {proposal.target_name or proposal.target_code} ({proposal.target_code}).",
+                f"Effective date: {eff_date.strftime('%B %d, %Y')}.",
+                f"Required status: {proposal.proposed_effect.value.replace('_', ' ').title()}.",
+            ],
+            denial_risk=f"Claims submitted without complying with {rule_id} are at risk of payer rejection.",
+            official_reference_url=None,
+        )
+
+        # Re-evaluate all open claims in caseload
+        affected_case_ids: List[str] = []
+        for cid, case in self.cases.items():
+            check_res = evaluate_case(case, list(self.rules.values()), governing_date=case.service_date)
+            # Find matching item verdict
+            for iv in check_res.results:
+                if iv.item.code.upper().strip() == p_code:
+                    if iv.result != "Covered":
+                        case.status = "Needs attention"
+                        affected_case_ids.append(cid)
+                    elif proposal.change_type == "delayed" and case.status == "Needs attention":
+                        # Postponed past service date -> case returns to Approved!
+                        case.status = "Approved"
+                        affected_case_ids.append(cid)
+
+        # Add update entry to Updates list
+        headline = (
+            f"{proposal.insurer_name} postpones {proposal.target_name or proposal.target_code} exclusion to {eff_date.strftime('%d %b %Y')}"
+            if proposal.change_type == "delayed"
+            else f"{proposal.insurer_name} updates {proposal.target_name or proposal.target_code} ({new_rule.effect.value.replace('_', ' ').title()})"
+        )
+        status_label = "Delayed" if proposal.change_type == "delayed" else (
+            "Cancelled" if proposal.change_type == "cancelled" else (
+                "Announced" if eff_date > date(2026, 10, 24) else "Effective"
+            )
+        )
+        update_entry = InsurerUpdateEntry(
+            update_id=f"UPD-{len(self.updates) + 1:03d}",
+            headline=headline,
+            item_type=proposal.target_type if proposal.target_type in ["drug", "procedure"] else "document",
+            effective_date=eff_date.strftime("%d %b %Y"),
+            status=status_label,
+            affected_cases_count=len(affected_case_ids),
+            affected_case_ids=affected_case_ids,
+            rule_id=rule_id,
+            rule_version=new_version,
+            published_at=utc_now(),
+        )
+        self.updates.insert(0, update_entry)
+
+        # Update proposal state
+        proposal.review_state = "approved"
+        proposal.approved_at = utc_now()
+        proposal.resulting_rule_id = rule_id
+        proposal.resulting_rule_version = new_version
+        if reviewer_notes:
+            proposal.reviewer_notes = reviewer_notes
+
+        # Synchronize active alerts feed through deterministic impact analyzer
+        try:
+            from app.impact.analyzer import run_impact_analysis
+            run_impact_analysis(source_event_desc=f"Approved policy proposal {proposal_id}")
+        except Exception as e:
+            print(f"Impact analyzer sync warning: {e}")
+
+        self.record_audit(
+            "POLICY_PROPOSAL_APPROVED",
+            {
+                "proposal_id": proposal_id,
+                "rule_id": rule_id,
+                "version": new_version,
+                "document": proposal.document_name,
+                "affected_cases_count": len(affected_case_ids),
+                "affected_case_ids": affected_case_ids,
+            },
+            actor="claims-reviewer",
+        )
+
+        return new_rule, affected_case_ids
+
+    def reject_proposal(
+        self,
+        proposal_id: str,
+        reviewer_notes: Optional[str] = None,
+    ) -> ProposedPolicyChange:
+        """Human reviewer rejects a proposed policy change."""
+        proposal = self.proposals.get(proposal_id)
+        if not proposal:
+            raise ValueError(f"Proposal {proposal_id} not found.")
+
+        proposal.review_state = "rejected"
+        proposal.reviewer_notes = reviewer_notes
+
+        self.record_audit(
+            "POLICY_PROPOSAL_REJECTED",
+            {
+                "proposal_id": proposal_id,
+                "document": proposal.document_name,
+                "notes": reviewer_notes,
+            },
+            actor="claims-reviewer",
+        )
+        return proposal
+
+    def get_all_alerts(self, status: Optional[str] = None) -> List[Alert]:
+        """Returns alerts sorted newest first, optionally filtered by status."""
+        alerts = list(self.alerts.values())
+        if status:
+            alerts = [a for a in alerts if a.status.value.lower() == status.lower()]
+        return sorted(alerts, key=lambda a: a.created_at, reverse=True)
+
+    def get_alerts_for_case(self, case_id: str) -> List[Alert]:
+        """Returns all alerts for a specific case."""
+        return [a for a in self.alerts.values() if a.case_id == case_id]
+
+    def update_alert_task(
+        self,
+        alert_id: str,
+        task_id: str,
+        task_status: str,
+        completed_by: Optional[str] = "Claims Officer",
+    ) -> Optional[Alert]:
+        """Updates the status of an administrative task within an alert."""
+        alert = self.alerts.get(alert_id)
+        if not alert:
+            return None
+        for t in alert.tasks:
+            if t.task_id == task_id:
+                t.status = task_status
+                if task_status == "completed":
+                    t.completed_by = completed_by
+                    t.completed_at = utc_now()
+                break
+        self.record_audit(
+            "ALERT_TASK_UPDATED",
+            {"alert_id": alert_id, "task_id": task_id, "status": task_status, "officer": completed_by},
+            actor=completed_by or "claims-reviewer",
+        )
+        return alert
+
+    def acknowledge_alert(self, alert_id: str, officer_note: Optional[str] = None) -> Optional[Alert]:
+        """Marks an alert as acknowledged by claims personnel."""
+        alert = self.alerts.get(alert_id)
+        if not alert:
+            return None
+        alert.acknowledged = True
+        if officer_note:
+            alert.officer_note = officer_note
+        self.record_audit(
+            "ALERT_ACKNOWLEDGED",
+            {"alert_id": alert_id, "case_id": alert.case_id, "note": officer_note},
+            actor="claims-reviewer",
+        )
+        return alert
 
 
 # Singleton store instance

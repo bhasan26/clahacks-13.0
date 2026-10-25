@@ -177,3 +177,154 @@ class InsurerConnectionInfo(BaseModel):
     last_check_time: str = "06:00 today"
     is_check_failed: bool = False
     warning_banner: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Alerts & Lifecycle
+# ---------------------------------------------------------------------------
+class VerdictType(str, Enum):
+    COVERED = "covered"
+    EXCLUDED = "excluded"
+    PRIOR_APPROVAL_NEEDED = "prior_approval_needed"
+    DOCUMENTS_MISSING = "documents_missing"
+    NO_RULE_FOUND = "no_rule_found"
+    CANNOT_ASSESS = "cannot_assess"
+
+
+class SeverityType(str, Enum):
+    CLEAR = "clear"
+    ACTION_NEEDED = "action_needed"
+    VERIFY = "verify"
+    INFO = "info"
+
+
+class AlertChange(BaseModel):
+    from_version: Optional[int] = None
+    to_version: int
+    change_type: Optional[str] = None
+    details: Optional[str] = None
+
+
+class AlertStatus(str, Enum):
+    OPEN = "open"
+    SUPERSEDED = "superseded"
+    CLOSED = "closed"
+
+
+class AlertTask(BaseModel):
+    task_id: str
+    title: str
+    status: Literal["open", "in_progress", "completed"] = "open"
+    completed_by: Optional[str] = None
+    completed_at: Optional[datetime] = None
+
+
+class Alert(BaseModel):
+    alert_id: str
+    case_id: str
+    item_code: str
+    rule_id: str
+    change: AlertChange
+    status: AlertStatus = AlertStatus.OPEN
+    supersedes: Optional[str] = None
+    closed_reason: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    headline: Optional[str] = None
+    explanation: Optional[str] = None
+    suggested_action: Optional[str] = None
+    acknowledged: bool = False
+    officer_note: Optional[str] = None
+    evidence_quote: Optional[str] = None
+    effective_date: Optional[str] = None
+    source_document: Optional[str] = None
+    tasks: List[AlertTask] = Field(default_factory=list)
+    draft_message: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Multimodal Policy Intelligence & Human Review
+# ---------------------------------------------------------------------------
+ReviewStateType = Literal["pending_review", "approved", "rejected", "needs_correction"]
+PolicyChangeType = Literal["new_rule", "modification", "delayed", "cancelled"]
+
+
+class ProposedPolicyChange(BaseModel):
+    proposal_id: str
+    document_id: str
+    document_name: str
+    insurer_id: str
+    insurer_name: str
+    plan_ids: List[str] = Field(default_factory=list)
+    policy_title: str
+    policy_reference: Optional[str] = None
+    target_type: Literal["drug", "procedure", "service"]
+    target_code: str
+    target_name: Optional[str] = None
+    previous_effect: Optional[str] = None
+    proposed_effect: RuleEffect
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
+    change_type: PolicyChangeType = "new_rule"
+    conditions: Optional[Dict[str, Any]] = None
+    supporting_quote: str
+    source_page: int = 1
+    confidence: Optional[float] = None
+    validation_warnings: List[str] = Field(default_factory=list)
+    review_state: ReviewStateType = "pending_review"
+    reviewer_notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    approved_at: Optional[datetime] = None
+    resulting_rule_id: Optional[str] = None
+    resulting_rule_version: Optional[int] = None
+
+
+class PolicyDiff(BaseModel):
+    proposal_id: str
+    has_existing_rule: bool
+    existing_rule_id: Optional[str] = None
+    existing_rule_version: Optional[int] = None
+    previous_effect: Optional[str] = None
+    proposed_effect: str
+    previous_effective_from: Optional[str] = None
+    proposed_effective_from: Optional[str] = None
+    is_delay: bool = False
+    is_cancellation: bool = False
+    diff_summary: str
+    change_category: str
+
+
+class ImpactCaseItem(BaseModel):
+    case_id: str
+    member_ref: str
+    specialty: str
+    service_date: str
+    item_code: str
+    item_name: str
+    previous_verdict: str
+    simulated_verdict: str
+    reason: str
+    supporting_quote: Optional[str] = None
+    action_steps: List[str] = Field(default_factory=list)
+
+
+class ImpactPreviewResult(BaseModel):
+    total_cases_checked: int
+    affected_cases: int
+    new_risks: int
+    unchanged_cases: int
+    cases: List[ImpactCaseItem]
+    simulation_timestamp: datetime = Field(default_factory=utc_now)
+
+
+class ExtractedDocumentResult(BaseModel):
+    document_id: str
+    filename: str
+    file_type: str
+    page_count: int
+    pages_text: List[Dict[str, Any]]
+    raw_text: str
+    proposals: List[ProposedPolicyChange]
+    diffs: List[PolicyDiff]
+    impact_preview: Optional[ImpactPreviewResult] = None
+    extracted_at: datetime = Field(default_factory=utc_now)
+

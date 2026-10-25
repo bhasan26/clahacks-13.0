@@ -164,6 +164,14 @@ export interface AlertChange {
   details?: string;
 }
 
+export interface AlertTask {
+  task_id: string;
+  title: string;
+  status: 'open' | 'in_progress' | 'completed';
+  completed_by?: string | null;
+  completed_at?: string | null;
+}
+
 export interface Alert {
   alert_id: string;
   case_id: string;
@@ -179,6 +187,11 @@ export interface Alert {
   suggested_action?: string;
   acknowledged: boolean;
   officer_note?: string;
+  evidence_quote?: string | null;
+  effective_date?: string | null;
+  source_document?: string | null;
+  tasks?: AlertTask[];
+  draft_message?: string | null;
 }
 
 export interface InsurerUpdateEntry {
@@ -288,4 +301,96 @@ export interface DashboardData {
   };
   specialties: SpecialtyBarData[];
   latest_updates: InsurerUpdateEntry[];
+}
+
+export type ReviewStateType = 'pending_review' | 'approved' | 'rejected' | 'needs_correction';
+export type PolicyChangeType = 'new_rule' | 'modification' | 'delayed' | 'cancelled';
+
+export interface ProposedPolicyChange {
+  proposal_id: string;
+  document_id: string;
+  document_name: string;
+  insurer_id: string;
+  insurer_name: string;
+  plan_ids: string[];
+  policy_title: string;
+  policy_reference?: string | null;
+  target_type: 'drug' | 'procedure' | 'service';
+  target_code: string;
+  target_name?: string | null;
+  previous_effect?: string | null;
+  proposed_effect: 'covered' | 'excluded' | 'requires_prior_approval' | 'requires_documents';
+  effective_from?: string | null;
+  effective_to?: string | null;
+  change_type: PolicyChangeType;
+  conditions?: Record<string, any> | null;
+  supporting_quote: string;
+  source_page: number;
+  confidence?: number | null;
+  validation_warnings: string[];
+  review_state: ReviewStateType;
+  reviewer_notes?: string | null;
+  created_at: string;
+  approved_at?: string | null;
+  resulting_rule_id?: string | null;
+  resulting_rule_version?: number | null;
+}
+
+export interface PolicyDiff {
+  proposal_id: string;
+  has_existing_rule: boolean;
+  existing_rule_id?: string | null;
+  existing_rule_version?: number | null;
+  previous_effect?: string | null;
+  proposed_effect: string;
+  previous_effective_from?: string | null;
+  proposed_effective_from?: string | null;
+  is_delay: boolean;
+  is_cancellation: boolean;
+  diff_summary: string;
+  change_category: string;
+}
+
+export interface ImpactCaseItem {
+  case_id: string;
+  member_ref: string;
+  specialty: string;
+  service_date: string;
+  item_code: string;
+  item_name: string;
+  previous_verdict: string;
+  simulated_verdict: string;
+  reason: string;
+  supporting_quote?: string | null;
+  action_steps: string[];
+}
+
+export interface ImpactPreviewResult {
+  total_cases_checked: number;
+  affected_cases: number;
+  new_risks: number;
+  unchanged_cases: number;
+  cases: ImpactCaseItem[];
+  simulation_timestamp: string;
+}
+
+export interface DocumentPageInfo {
+  page: number;
+  text: string;
+  preview_image?: string | null;
+  is_scanned: boolean;
+  spans?: Array<{ word: string; bbox: number[] }>;
+}
+
+export interface ExtractedDocumentResult {
+  document_id: string;
+  filename: string;
+  file_type: string;
+  page_count: number;
+  pages_text: DocumentPageInfo[];
+  raw_text: string;
+  proposals: ProposedPolicyChange[];
+  diffs: PolicyDiff[];
+  impact_preview?: ImpactPreviewResult | null;
+  extracted_at: string;
 }

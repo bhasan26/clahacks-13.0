@@ -6,6 +6,7 @@ import { UpdatesPage } from './components/UpdatesPage';
 import { CaseDetailModal } from './components/CaseDetailModal';
 import { UploadPatientFileModal } from './components/UploadPatientFileModal';
 import { DemoControlDock } from './components/DemoControlDock';
+import { PolicyIntelligence } from './components/PolicyIntelligence';
 import {
   fetchDashboard,
   fetchCases,
@@ -26,7 +27,7 @@ import {
 } from './types';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'cases' | 'updates'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'cases' | 'updates' | 'intelligence'>('dashboard');
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [cases, setCases] = useState<Case[]>([]);
   const [updates, setUpdates] = useState<InsurerUpdateEntry[]>([]);
@@ -218,6 +219,21 @@ export function App() {
             <UpdatesPage
               updates={updates}
               onViewAffectedCases={handleViewAffectedCases}
+            />
+          )}
+
+          {activeTab === 'intelligence' && (
+            <PolicyIntelligence
+              onPolicyApproved={async (affectedIds) => {
+                showToast(`Policy approved! ${affectedIds.length} hospital claims updated.`);
+                await loadAll();
+              }}
+              onNavigateToCases={(caseIds) => {
+                setInitialStatusFilter('Needs attention');
+                setInitialSpecialtyFilter('All');
+                setActiveTab('cases');
+                showToast(`Filtered to claims affected by policy change (${caseIds.slice(0, 5).join(', ')}...)`);
+              }}
             />
           )}
         </main>

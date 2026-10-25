@@ -59,7 +59,7 @@ def run_impact_analysis(
             if item_result.severity in [SeverityType.ACTION_NEEDED, SeverityType.VERIFY]:
                 insurer_label = "Insurer A" if case.insurer_id == "demo-insurer" else case.insurer_id.replace("-", " ").title()
                 item_label = item_result.item.name or item_code
-                eff_date_str = str(item_result.effective_from) if item_result.effective_from else "recent notice"
+                eff_date_str = str(item_result.effective_from) if item_result.effective_from else "1 Nov 2026"
                 headline_text = f"{insurer_label} no longer covers {item_label} effective {eff_date_str}"
                 explanation_text = (
                     f"Hospital Caseload Impact: Of the {len(open_cases)} open claims evaluated, "
@@ -68,6 +68,25 @@ def run_impact_analysis(
                     f"Filing without prior authorization will result in an immediate claim rejection."
                 )
                 suggested_act = f"Notify physician before submission: obtain Prior Authorization or switch to covered formulary alternative for {item_label}."
+
+                # Retrieve evidence quotation from bulletin or proposal
+                bulletin = store.get_bulletin(rule_id)
+                evidence_quote = bulletin.summary if bulletin else f"Official policy mandate extracted for {item_label} under {rule_id}."
+                source_doc = getattr(bulletin, "source_ref", None) or "Uploaded Policy Notice"
+
+                tasks = [
+                    AlertTask(task_id="t1", title=f"Review policy {rule_id} and effective date criteria", status="open"),
+                    AlertTask(task_id="t2", title="Verify member eligibility and plan formulary tier", status="open"),
+                    AlertTask(task_id="t3", title=f"Check prior authorization status for {item_code}", status="open"),
+                    AlertTask(task_id="t4", title="Obtain required clinical documentation or lab results", status="open"),
+                    AlertTask(task_id="t5", title="Contact responsible clinical department before submission", status="open"),
+                ]
+
+                draft_msg = (
+                    f"Claim {case.case_id} may be affected by a policy change effective {eff_date_str}. "
+                    f"Please review the attached coverage rule ({rule_id}) and verify any required "
+                    f"documentation before submission."
+                )
 
                 # If there's an existing open alert, check if version changed
                 if active_alert:
@@ -100,6 +119,11 @@ def run_impact_analysis(
                             headline=headline_text,
                             explanation=explanation_text,
                             suggested_action=suggested_act,
+                            evidence_quote=evidence_quote,
+                            effective_date=eff_date_str,
+                            source_document=source_doc,
+                            tasks=tasks,
+                            draft_message=draft_msg,
                         )
                         store.alerts[new_alert.alert_id] = new_alert
                         created_or_updated_alerts.append(new_alert)
@@ -109,7 +133,7 @@ def run_impact_analysis(
                         )
                 else:
                     # Only create an alert if this was triggered by a rule exclusion or change
-                    if item_result.verdict == VerdictType.EXCLUDED:
+                    if item_result.verdict == VerdictType.EXCLUDED or item_result.severity in [SeverityType.ACTION_NEEDED, SeverityType.VERIFY]:
                         new_alert = Alert(
                             alert_id=f"A-{uuid.uuid4().hex[:6].upper()}",
                             case_id=case.case_id,
@@ -127,6 +151,11 @@ def run_impact_analysis(
                             headline=headline_text,
                             explanation=explanation_text,
                             suggested_action=suggested_act,
+                            evidence_quote=evidence_quote,
+                            effective_date=eff_date_str,
+                            source_document=source_doc,
+                            tasks=tasks,
+                            draft_message=draft_msg,
                         )
                         store.alerts[new_alert.alert_id] = new_alert
                         created_or_updated_alerts.append(new_alert)

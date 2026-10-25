@@ -1,0 +1,26 @@
+# DEMO INSURANCE CO. — OFFICIAL POLICY BULLETIN
+## Bulletin Ref: 2026-1042-V2 | Date: October 24, 2026
+
+TO: In-Network Hospital Providers & Claims Administration
+FROM: Commercial Formulary Pharmacy & Therapeutics Committee
+SUBJECT: Coverage Exclusion for Drug A (DRUG-A)
+
+POLICY UPDATE NOTICE (SYNTHETIC TEST FIXTURE):
+Beginning November 1, 2026, PLAN-GOLD will no longer cover DRUG-A.
+This coverage exclusion applies to all outpatient hospital claims with date
+of service on or after November 1, 2026.
+
+AFFECTED BENEFITS:
+Insurer: Demo Insurance Co.
+Benefit Plan: PLAN-GOLD Commercial Comprehensive
+Target Drug: Drug A (HCPCS Code: DRUG-A)
+Prior Coverage Status: Covered
+New Coverage Status: Excluded / Non-Covered
+Effective Date: November 1, 2026
+
+CLAIMS ADJUDICATION INSTRUCTIONS:
+Claims submitted for DRUG-A on or after November 1, 2026 will be rejected
+under adjustment reason code CO-96 (Non-covered charge). Hospital claims
+officers should review with the ordering physician before submitting.
+
+Auth: Medical Director Dr. Sarah Jenkins, MD (MD-94021)

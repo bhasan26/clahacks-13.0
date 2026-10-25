@@ -1,0 +1,24 @@
+# DEMO INSURANCE CO. — POLICY REVISION & POSTPONEMENT
+## Bulletin Ref: 2026-1042-DELAY | Date: October 26, 2026
+
+TO: Hospital Billing Departments & Clinical Claims Officers
+FROM: Office of the Chief Medical Officer
+SUBJECT: Temporary Delay of Coverage Exclusion for Drug A
+
+POLICY REVISION NOTICE (SYNTHETIC TEST FIXTURE):
+In response to provider network feedback and transitional care continuity,
+the previously announced coverage exclusion for DRUG-A is postponed until December 1, 2026.
+
+REVISED TERMS:
+Insurer: Demo Insurance Co.
+Benefit Plan: PLAN-GOLD
+Target Drug: Drug A (DRUG-A)
+Original Effective Date: November 1, 2026 (Superseded)
+New Delayed Effective Date: December 1, 2026
+
+INTERIM COVERAGE ADJUDICATION:
+Claims with service dates between November 1, 2026 and November 30, 2026 will
+continue to be covered under existing formulary terms. The non-coverage rule
+will take effect strictly on services rendered December 1, 2026 and onward.
+
+Auth: Pharmacy & Therapeutics Operations (Ref: DELAY-772)

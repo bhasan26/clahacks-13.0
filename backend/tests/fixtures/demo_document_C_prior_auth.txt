@@ -1,0 +1,24 @@
+# DEMO INSURANCE CO. — MEDICAL MANAGEMENT CIRCULAR
+## Circular Ref: 2026-202-V2 | Date: October 24, 2026
+
+TO: Orthopedic Surgery Departments & Hospital Utilization Management
+FROM: Utilization Review & Precertification Committee
+SUBJECT: Mandatory Prior Authorization for Major Joint Procedures
+
+CLINICAL POLICY UPDATE (SYNTHETIC TEST FIXTURE):
+Prior authorization is mandatory for Major Joint Procedure (PROC-1) effective December 15, 2026.
+
+CLINICAL MANDATE DETAILS:
+Insurer: Demo Insurance Co.
+Applicable Plans: PLAN-GOLD
+Procedure Code: PROC-1 (Major Joint Procedure)
+New Requirement: Pre-service clinical authorization from insurer
+Effective Date: December 15, 2026
+
+REQUIRED DOCUMENTATION:
+1. Clinical notes documenting conservative therapy trial.
+2. Diagnostic radiology report (X-ray or MRI).
+3. Prior authorization confirmation reference code.
+
+Submissions without an approved authorization reference will be rejected
+under code CO-197 (Precertification absent).
