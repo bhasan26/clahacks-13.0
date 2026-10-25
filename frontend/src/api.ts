@@ -21,12 +21,20 @@ import {
 
 const API_BASE = '/api';
 
+async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set('X-Synthetic-Data', 'true');
+  const token = sessionStorage.getItem('coverageguard-reviewer-token');
+  if (token) headers.set('X-Reviewer-Token', token);
+  return fetch(input, { ...init, headers });
+}
+
 // -------------------------------------------------------------
 // New Clean Specification API Methods
 // -------------------------------------------------------------
 
 export async function fetchDashboard(): Promise<DashboardData> {
-  const res = await fetch(`${API_BASE}/dashboard`);
+  const res = await apiFetch(`${API_BASE}/dashboard`);
   if (!res.ok) throw new Error('Failed to fetch dashboard metrics');
   return res.json();
 }
@@ -36,13 +44,13 @@ export async function fetchCases(status?: string, specialty?: string): Promise<C
   if (status && status !== 'All') params.set('status', status);
   if (specialty && specialty !== 'All') params.set('specialty', specialty);
 
-  const res = await fetch(`${API_BASE}/cases?${params.toString()}`);
+  const res = await apiFetch(`${API_BASE}/cases?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch cases');
   return res.json();
 }
 
 export async function fetchCaseDetail(caseId: string): Promise<CaseDetailResponse> {
-  const res = await fetch(`${API_BASE}/cases/${caseId}`);
+  const res = await apiFetch(`${API_BASE}/cases/${caseId}`);
   if (!res.ok) throw new Error(`Failed to fetch case detail for ${caseId}`);
   return res.json();
 }
@@ -57,7 +65,7 @@ export async function analyzeIntake(data: {
   selected_insurer_name?: string;
   selected_plan_id?: string;
 }): Promise<IntakeAnalysisResult> {
-  const res = await fetch(`${API_BASE}/intake/analyze`, {
+  const res = await apiFetch(`${API_BASE}/intake/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -68,7 +76,7 @@ export async function analyzeIntake(data: {
 
 export async function fetchPolicyBulletin(ruleId: string): Promise<PolicyBulletin> {
   const cleanId = encodeURIComponent(ruleId.trim());
-  const res = await fetch(`${API_BASE}/bulletins/${cleanId}`);
+  const res = await apiFetch(`${API_BASE}/bulletins/${cleanId}`);
   if (!res.ok) throw new Error(`Failed to fetch policy bulletin for ${ruleId}`);
   return res.json();
 }
@@ -91,7 +99,7 @@ export async function uploadPatientFile(data: {
   diagnosis_desc?: string;
   documents?: string[];
 }): Promise<any> {
-  const res = await fetch(`${API_BASE}/cases/upload`, {
+  const res = await apiFetch(`${API_BASE}/cases/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -104,25 +112,25 @@ export async function fetchUpdates(itemType?: string): Promise<InsurerUpdateEntr
   const params = new URLSearchParams();
   if (itemType && itemType !== 'All') params.set('item_type', itemType.toLowerCase());
 
-  const res = await fetch(`${API_BASE}/updates?${params.toString()}`);
+  const res = await apiFetch(`${API_BASE}/updates?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch insurer updates');
   return res.json();
 }
 
 export async function fetchConnection(): Promise<InsurerConnectionInfo> {
-  const res = await fetch(`${API_BASE}/connection`);
+  const res = await apiFetch(`${API_BASE}/connection`);
   if (!res.ok) throw new Error('Failed to fetch connection info');
   return res.json();
 }
 
 export async function triggerRunCheckNow(): Promise<any> {
-  const res = await fetch(`${API_BASE}/check/run-now`, { method: 'POST' });
+  const res = await apiFetch(`${API_BASE}/check/run-now`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to run check now');
   return res.json();
 }
 
 export async function updateCleanClaimsTarget(target: number): Promise<any> {
-  const res = await fetch(`${API_BASE}/settings/target`, {
+  const res = await apiFetch(`${API_BASE}/settings/target`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ target }),
@@ -132,13 +140,13 @@ export async function updateCleanClaimsTarget(target: number): Promise<any> {
 }
 
 export async function toggleCheckFailure(): Promise<any> {
-  const res = await fetch(`${API_BASE}/connection/toggle-fail`, { method: 'POST' });
+  const res = await apiFetch(`${API_BASE}/connection/toggle-fail`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to toggle connection failure');
   return res.json();
 }
 
 export async function resetDemoState(): Promise<any> {
-  const res = await fetch(`${API_BASE}/simulator/reset`, { method: 'POST' });
+  const res = await apiFetch(`${API_BASE}/simulator/reset`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to reset demo state');
   return res.json();
 }
@@ -157,7 +165,7 @@ export async function extractPolicyDocument(options: {
   if (options.file) {
     const formData = new FormData();
     formData.append('file', options.file);
-    const res = await fetch(`${API_BASE}/policies/extract`, {
+    const res = await apiFetch(`${API_BASE}/policies/extract`, {
       method: 'POST',
       body: formData,
     });
@@ -167,7 +175,7 @@ export async function extractPolicyDocument(options: {
     }
     return res.json();
   } else {
-    const res = await fetch(`${API_BASE}/policies/extract`, {
+    const res = await apiFetch(`${API_BASE}/policies/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -188,7 +196,7 @@ export async function extractPolicyDocument(options: {
 export async function previewPolicyImpact(
   proposals: ProposedPolicyChange[]
 ): Promise<ImpactPreviewResult> {
-  const res = await fetch(`${API_BASE}/policies/preview-impact`, {
+  const res = await apiFetch(`${API_BASE}/policies/preview-impact`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ proposals }),
@@ -198,13 +206,13 @@ export async function previewPolicyImpact(
 }
 
 export async function fetchPolicyProposals(): Promise<ProposedPolicyChange[]> {
-  const res = await fetch(`${API_BASE}/policies/proposals`);
+  const res = await apiFetch(`${API_BASE}/policies/proposals`);
   if (!res.ok) throw new Error('Failed to load policy proposals');
   return res.json();
 }
 
 export async function fetchPolicyProposal(proposalId: string): Promise<ProposedPolicyChange> {
-  const res = await fetch(`${API_BASE}/policies/proposals/${proposalId}`);
+  const res = await apiFetch(`${API_BASE}/policies/proposals/${proposalId}`);
   if (!res.ok) throw new Error(`Failed to load proposal ${proposalId}`);
   return res.json();
 }
@@ -220,7 +228,7 @@ export async function approvePolicyProposal(
   affected_cases_count: number;
   affected_case_ids: string[];
 }> {
-  const res = await fetch(`${API_BASE}/policies/proposals/${proposalId}/approve`, {
+  const res = await apiFetch(`${API_BASE}/policies/proposals/${proposalId}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reviewer_notes: reviewerNotes, edited_fields: editedFields }),
@@ -236,7 +244,7 @@ export async function rejectPolicyProposal(
   proposalId: string,
   reviewerNotes?: string
 ): Promise<{ success: boolean; message: string; proposal: any }> {
-  const res = await fetch(`${API_BASE}/policies/proposals/${proposalId}/reject`, {
+  const res = await apiFetch(`${API_BASE}/policies/proposals/${proposalId}/reject`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reviewer_notes: reviewerNotes }),
@@ -246,7 +254,7 @@ export async function rejectPolicyProposal(
 }
 
 export async function fetchExtractedDocument(docId: string): Promise<ExtractedDocumentResult> {
-  const res = await fetch(`${API_BASE}/policies/documents/${docId}`);
+  const res = await apiFetch(`${API_BASE}/policies/documents/${docId}`);
   if (!res.ok) throw new Error('Failed to fetch extracted document');
   return res.json();
 }
@@ -256,7 +264,7 @@ export async function fetchExtractedDocument(docId: string): Promise<ExtractedDo
 // -------------------------------------------------------------
 
 export async function fetchHealth(): Promise<HealthStatus> {
-  const res = await fetch(`${API_BASE}/health`);
+  const res = await apiFetch(`${API_BASE}/health`);
   if (!res.ok) throw new Error('Failed to fetch health');
   return res.json();
 }
@@ -267,13 +275,13 @@ export async function fetchRules(): Promise<Rule[]> {
 
 export async function fetchAlerts(status?: string): Promise<Alert[]> {
   const url = status ? `${API_BASE}/alerts?status=${encodeURIComponent(status)}` : `${API_BASE}/alerts`;
-  const res = await fetch(url);
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error('Failed to fetch alerts');
   return res.json();
 }
 
 export async function fetchCaseAlerts(caseId: string): Promise<Alert[]> {
-  const res = await fetch(`${API_BASE}/alerts/case/${encodeURIComponent(caseId)}`);
+  const res = await apiFetch(`${API_BASE}/alerts/case/${encodeURIComponent(caseId)}`);
   if (!res.ok) throw new Error(`Failed to fetch alerts for case ${caseId}`);
   return res.json();
 }
@@ -284,7 +292,7 @@ export async function updateAlertTask(
   taskStatus: 'open' | 'in_progress' | 'completed',
   completedBy?: string
 ): Promise<{ success: boolean; alert: Alert }> {
-  const res = await fetch(`${API_BASE}/alerts/${alertId}/tasks/${taskId}`, {
+  const res = await apiFetch(`${API_BASE}/alerts/${alertId}/tasks/${taskId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: taskStatus, completed_by: completedBy || 'Claims Officer' }),
@@ -294,7 +302,7 @@ export async function updateAlertTask(
 }
 
 export async function acknowledgeAlert(alertId: string, note?: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/alerts/${alertId}/acknowledge`, {
+  const res = await apiFetch(`${API_BASE}/alerts/${alertId}/acknowledge`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ officer_note: note }),
@@ -310,7 +318,7 @@ export async function generateAlertDraft(alertId: string): Promise<{
   draft_message: string;
   disclaimer: string;
 }> {
-  const res = await fetch(`${API_BASE}/alerts/${alertId}/draft`, { method: 'POST' });
+  const res = await apiFetch(`${API_BASE}/alerts/${alertId}/draft`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to generate draft message');
   return res.json();
 }
@@ -383,13 +391,13 @@ export async function createCase(caseData: any): Promise<any> {
 // -------------------------------------------------------------
 
 export async function fetchOfficialSources(): Promise<OfficialPolicySource[]> {
-  const res = await fetch(`${API_BASE}/sources`);
+  const res = await apiFetch(`${API_BASE}/sources`);
   if (!res.ok) throw new Error('Failed to fetch official policy sources');
   return res.json();
 }
 
 export async function checkOfficialSource(sourceId?: string): Promise<SourceCheckHistory> {
-  const res = await fetch(`${API_BASE}/sources/check`, {
+  const res = await apiFetch(`${API_BASE}/sources/check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source_id: sourceId }),
@@ -400,7 +408,7 @@ export async function checkOfficialSource(sourceId?: string): Promise<SourceChec
 
 export async function fetchSourceHistory(sourceId?: string): Promise<SourceCheckHistory[]> {
   const url = sourceId ? `${API_BASE}/sources/history?source_id=${encodeURIComponent(sourceId)}` : `${API_BASE}/sources/history`;
-  const res = await fetch(url);
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error('Failed to fetch source check history');
   return res.json();
 }
@@ -412,19 +420,19 @@ export async function fetchSourcesStatus(): Promise<{
   latest_check?: SourceCheckHistory | null;
   is_real_external_connection: boolean;
 }> {
-  const res = await fetch(`${API_BASE}/sources/status`);
+  const res = await apiFetch(`${API_BASE}/sources/status`);
   if (!res.ok) throw new Error('Failed to fetch sources status');
   return res.json();
 }
 
 export async function fetchDemoMode(): Promise<{ demo_mode: boolean }> {
-  const res = await fetch(`${API_BASE}/settings/demo-mode`);
+  const res = await apiFetch(`${API_BASE}/settings/demo-mode`);
   if (!res.ok) throw new Error('Failed to fetch demo mode setting');
   return res.json();
 }
 
 export async function setDemoMode(demoMode: boolean): Promise<{ success: boolean; demo_mode: boolean }> {
-  const res = await fetch(`${API_BASE}/settings/demo-mode`, {
+  const res = await apiFetch(`${API_BASE}/settings/demo-mode`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ demo_mode: demoMode }),

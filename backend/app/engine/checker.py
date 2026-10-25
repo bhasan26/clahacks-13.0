@@ -8,7 +8,7 @@ Produces plain wording per specification:
 - Agent only notifies; never edits, rejects, or submits, and never suggests a medical alternative.
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional, Tuple
 
 from app.domain.models import (
@@ -26,55 +26,48 @@ from app.domain.models import (
 
 def format_date_plain(d: Optional[date]) -> str:
     if not d:
-        return "1 Nov 2026"
+        return "Unknown effective date"
     return d.strftime("%-d %b %Y")
 
 
+from app.engine.matcher import match_insurer, match_plan, match_item_code, normalize_insurer_id
+
+
 def normalize_insurer(ins: Optional[str]) -> str:
-    s = (ins or "").lower()
-    if "aetna" in s:
-        return "aetna"
-    if "blue" in s or "bcbs" in s:
-        return "bcbs"
-    if "united" in s or "uhc" in s:
-        return "uhc"
-    if "cigna" in s:
-        return "cigna"
-    if "medicare" in s or "cms" in s:
-        return "cms"
-    return "demo-insurer"
-
-
-ALIAS_MAP = {
-    "KEYTRUDA": ["KEYTRUDA", "PEMBROLIZUMAB", "J9271"],
-    "PEMBROLIZUMAB": ["KEYTRUDA", "PEMBROLIZUMAB", "J9271"],
-    "J9271": ["KEYTRUDA", "PEMBROLIZUMAB", "J9271"],
-    "OZEMPIC": ["OZEMPIC", "SEMAGLUTIDE", "J3490", "WEGOVY"],
-    "SEMAGLUTIDE": ["OZEMPIC", "SEMAGLUTIDE", "J3490", "WEGOVY"],
-    "HUMIRA": ["HUMIRA", "ADALIMUMAB", "J0135"],
-    "ADALIMUMAB": ["HUMIRA", "ADALIMUMAB", "J0135"],
-    "PROC-1": ["PROC-1", "KNEE ARTHROPLASTY", "TOTAL KNEE", "27447", "MAJOR JOINT PROCEDURE"],
-    "DRUG-A": ["DRUG-A", "DRUG A"],
-    "DRUG-B": ["DRUG-B", "DRUG B", "LISINOPRIL", "ATORVASTATIN"],
-}
+    return normalize_insurer_id(ins)
 
 
 def codes_match(target_code: str, item_code: str, item_name: Optional[str] = None) -> bool:
-    t_up = target_code.upper()
-    i_up = item_code.upper()
-    if t_up == i_up:
-        return True
-    
-    aliases = ALIAS_MAP.get(t_up, [t_up])
-    if i_up in aliases:
-        return True
-    
-    if item_name:
-        name_up = item_name.upper()
-        if any(alias in name_up for alias in aliases):
-            return True
-            
-    return False
+    return match_item_code(target_code, item_code)
+
+
+def rules_for_date(rules: List[Rule], service_date: date) -> List[Rule]:
+    """Resolve revision chains without modifying stored historical versions.
+
+    Delays withdraw the superseded schedule. Cancellations withdraw it from their
+    stated effective date. Older independent coverage remains available.
+    """
+    suppressed = set()
+    by_key = {(r.rule_id, r.version): r for r in rules}
+    for r in rules:
+        if r.change_type == "delayed" or (r.change_type == "cancelled" and service_date >= r.effective_from):
+            version = r.replaces_version
+            while version is not None:
+                key = (r.rule_id, version)
+                suppressed.add(key)
+                previous = by_key.get(key)
+                version = previous.replaces_version if previous else None
+    candidates = [r for r in rules if (r.rule_id, r.version) not in suppressed
+                  and r.status not in {RuleStatus.CANCELLED, RuleStatus.SUPERSEDED}
+                  and r.effective_from <= service_date
+                  and (r.effective_to is None or service_date < r.effective_to)]
+    latest = {}
+    for r in candidates:
+        # Version precedence is per rule identity, never across unrelated policies.
+        key = (r.rule_id, normalize_insurer_id(r.insurer_id), tuple(sorted(r.plan_ids)), r.target.type, r.target.code)
+        if key not in latest or r.version > latest[key].version:
+            latest[key] = r
+    return list(latest.values())
 
 
 def is_rule_applicable(
@@ -85,15 +78,9 @@ def is_rule_applicable(
     governing_date: date,
 ) -> bool:
     """Check if a rule version applies to an item on governing_date."""
-    # Match insurer
-    if rule.insurer_id != "*" and rule.insurer_id != insurer_id:
-        if normalize_insurer(rule.insurer_id) != normalize_insurer(insurer_id):
-            return False
-
-    if "*" not in rule.plan_ids and plan_id not in rule.plan_ids:
+    if not match_insurer(rule.insurer_id, insurer_id) or not match_plan(rule.plan_ids, plan_id):
         return False
-
-    if not codes_match(rule.target.code, item.code, item.name):
+    if rule.target.type != item.type or not codes_match(rule.target.code, item.code):
         return False
 
     if rule.status in [RuleStatus.CANCELLED, RuleStatus.SUPERSEDED]:
@@ -150,40 +137,6 @@ def check_item(
 
     # 1. No rule found
     if not best_rule or has_conflict:
-        # Check if an upcoming rule was announced after governing date
-        upcoming = [
-            r
-            for r in rules
-            if (r.insurer_id == "*" or normalize_insurer(r.insurer_id) == normalize_insurer(case.insurer_id))
-            and ("*" in r.plan_ids or case.plan_id in r.plan_ids)
-            and codes_match(r.target.code, item.code, item.name)
-            and r.status in [RuleStatus.ANNOUNCED, RuleStatus.EFFECTIVE]
-            and r.effective_from > governing_date
-        ]
-
-        if upcoming:
-            latest_upcoming = sorted(upcoming, key=lambda r: r.effective_from)[0]
-            eff_str = format_date_plain(latest_upcoming.effective_from)
-            sentence = f"{item_display} has an announced policy change effective {eff_str}."
-            rule_ref = f"Rule {latest_upcoming.rule_id}."
-            action = "Verify with the insurer before submitting."
-            return ItemVerdict(
-                item=item,
-                result="Covered",
-                rule_id=latest_upcoming.rule_id,
-                rule_version=latest_upcoming.version,
-                effective_date=eff_str,
-                plain_sentence=sentence,
-                rule_reference=rule_ref,
-                what_to_do=action,
-                full_issue_text=f"{sentence} {rule_ref} {action}",
-                source_title=latest_upcoming.source_title or f"Policy Bulletin {latest_upcoming.rule_id}",
-                source_url=latest_upcoming.source_url or f"/api/bulletins/{latest_upcoming.rule_id}",
-                official_reference_url=latest_upcoming.official_reference_url,
-                bulletin_summary=latest_upcoming.bulletin_summary,
-                action_guidance=latest_upcoming.action_guidance,
-            )
-
         sentence = f"No matching rule found for {item_display}."
         rule_ref = "Rule unlisted."
         action = "No rule found, verify with the insurer."
@@ -316,13 +269,16 @@ def evaluate_case(
     case: Case,
     rules: List[Rule],
     governing_date: Optional[date] = None,
+    as_of: Optional["datetime"] = None,
 ) -> CaseCheckResult:
     """Evaluate entire case and return CaseCheckResult with plain status."""
     target_date = governing_date or case.service_date
     item_verdicts: List[ItemVerdict] = []
+    known_rules = [r for r in rules if as_of is None or r.received_at <= as_of]
+    rules = rules_for_date(known_rules, target_date) if target_date else []
 
     # Check if core fields are missing or wrong
-    if not case.service_date or not case.insurer_id or not case.plan_id:
+    if not case.service_date or not case.insurer_id or not case.plan_id or not case.items:
         return CaseCheckResult(
             case_id=case.case_id,
             specialty=case.specialty,
@@ -332,13 +288,13 @@ def evaluate_case(
                 ItemVerdict(
                     item=CaseItem(type="case", code="INFO", name="Patient Record"),
                     result="Value wrong",
-                    rule_id="R-100",
-                    rule_version=1,
-                    effective_date="1 Jan 2026",
+                    rule_id=None,
+                    rule_version=None,
+                    effective_date=None,
                     plain_sentence="Patient service date or insurer plan reference is missing or wrong.",
-                    rule_reference="Rule R-100.",
+                    rule_reference="Patient record validation.",
                     what_to_do="Review and correct patient record values before submitting.",
-                    full_issue_text="Patient service date or insurer plan reference is missing or wrong. Rule R-100. Review and correct patient record values before submitting.",
+                    full_issue_text="Patient service date or insurer plan reference is missing or wrong. Review and correct patient record values before submitting.",
                 )
             ],
         )

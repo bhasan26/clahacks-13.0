@@ -33,13 +33,13 @@ INSURER_ALIASES: Dict[str, Set[str]] = {
 
 def normalize_insurer_id(insurer_id: Optional[str]) -> str:
     """Normalizes an insurer ID or string representation to a canonical key."""
-    if not insurer_id or insurer_id == "*":
-        return "*"
+    if not insurer_id:
+        return ""
     clean = insurer_id.strip().lower()
     for canonical, aliases in INSURER_ALIASES.items():
         if clean == canonical or clean in aliases:
             return canonical
-    return clean.replace("-", "").replace("_", "").replace(" ", "")
+    return clean
 
 
 def match_insurer(rule_or_proposal_insurer: Optional[str], target_insurer: Optional[str]) -> bool:
@@ -50,9 +50,8 @@ def match_insurer(rule_or_proposal_insurer: Optional[str], target_insurer: Optio
     norm_a = normalize_insurer_id(rule_or_proposal_insurer)
     norm_b = normalize_insurer_id(target_insurer)
 
-    if norm_a == "*" or norm_b == "*":
-        return True
-    return norm_a == norm_b
+    return bool(norm_a and norm_b and norm_a not in {"*", "unknown", "none"}
+                and norm_b not in {"*", "unknown", "none"} and norm_a == norm_b)
 
 
 def match_plan(rule_plan_ids: Optional[List[str]], claim_plan_id: Optional[str]) -> bool:
@@ -60,10 +59,10 @@ def match_plan(rule_plan_ids: Optional[List[str]], claim_plan_id: Optional[str])
     Checks if an insurance plan ID matches rule plan requirements.
     Plan IDs must match exactly, or match if the rule specifies wildcard '*'.
     """
-    if not rule_plan_ids or "*" in rule_plan_ids:
-        return True
-    if not claim_plan_id:
+    if not rule_plan_ids or not claim_plan_id or claim_plan_id.strip().upper() in {"", "*", "UNKNOWN", "NONE", "UNVERIFIED"}:
         return False
+    if "*" in rule_plan_ids:
+        return True
 
     clean_claim_plan = claim_plan_id.strip().upper()
     return clean_claim_plan in {p.strip().upper() for p in rule_plan_ids}
@@ -103,9 +102,11 @@ def is_rule_applicable_on_date(
         rule_effective_to = getattr(rule_or_from, "effective_to", None)
         target_date = effective_to_or_check_date
 
-    if rule_effective_from and target_date < rule_effective_from:
+    if not rule_effective_from or not target_date:
         return False
-    if rule_effective_to and target_date > rule_effective_to:
+    if target_date < rule_effective_from:
+        return False
+    if rule_effective_to and target_date >= rule_effective_to:
         return False
     return True
 
@@ -124,14 +125,13 @@ def match_proposal_to_target(
     if not match_item_code(proposal.target_code, item_code):
         return False
 
-    if proposal.target_type and item_type:
-        if proposal.target_type.lower() != item_type.lower():
-            return False
-
-    if insurer_id and not match_insurer(proposal.insurer_id, insurer_id):
+    if not proposal.target_type or not item_type or proposal.target_type != item_type:
         return False
 
-    if plan_id and not match_plan(proposal.plan_ids, plan_id):
+    if not match_insurer(proposal.insurer_id, insurer_id):
+        return False
+
+    if not match_plan(proposal.plan_ids, plan_id):
         return False
 
     return True
@@ -176,6 +176,8 @@ def match_proposal_to_claim_item(
         return False
 
     # Date check
+    if not proposal.effective_from:
+        return False
     if service_dt:
         if proposal.effective_from and service_dt < proposal.effective_from:
             return False
@@ -202,11 +204,14 @@ def match_proposal_to_rule(
     if not match_item_code(proposal.target_code, rule.target.code):
         return False
 
-    if proposal.target_type and rule.target.type:
-        if proposal.target_type.lower() != rule.target.type.lower():
-            return False
+    if not proposal.target_type or proposal.target_type != rule.target.type:
+        return False
 
     if not match_insurer(proposal.insurer_id, rule.insurer_id):
+        return False
+
+    # A scope change creates a separate rule; it cannot version another plan's rule.
+    if not proposal.plan_ids or {p.strip().upper() for p in proposal.plan_ids} != {p.strip().upper() for p in rule.plan_ids}:
         return False
 
     return True

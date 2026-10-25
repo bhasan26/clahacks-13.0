@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.db.store import store
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 
 
 @pytest.fixture(autouse=True)

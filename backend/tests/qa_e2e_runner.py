@@ -17,11 +17,15 @@ from pathlib import Path
 # Add backend directory to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import os
+os.environ["COVERAGEGUARD_STATE_PATH"] = ""
+os.environ["COVERAGEGUARD_DISABLE_AI"] = "true"
+
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.store import store
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 
 
 def run_all_qa_checks():

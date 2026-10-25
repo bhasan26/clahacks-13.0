@@ -9,6 +9,32 @@ Matches all user specifications:
 """
 
 import os
+from threading import RLock
+from functools import wraps
+
+_STATE_LOCK = RLock()
+
+def serialized(method):
+    @wraps(method)
+    def wrapped(*args, **kwargs):
+        with _STATE_LOCK:
+            return method(*args, **kwargs)
+    return wrapped
+
+
+def transactional(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        from copy import deepcopy
+        snapshot = deepcopy(self.__dict__)
+        try:
+            return method(self, *args, **kwargs)
+        except Exception:
+            self.__dict__.clear()
+            self.__dict__.update(snapshot)
+            raise
+    return wrapped
+
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -36,7 +62,58 @@ from app.engine.checker import evaluate_case
 
 
 class DataStore:
-    def __init__(self):
+    def _checkpoint_path(self):
+        from pathlib import Path
+        value = os.environ.get("COVERAGEGUARD_STATE_PATH")
+        if value == "" or not getattr(self, "_persistent", True):
+            return None
+        return Path(value) if value else Path(__file__).resolve().parents[2] / "data" / "state.json"
+
+    @serialized
+    def save_checkpoint(self):
+        """Atomic local snapshot for this single-process synthetic-data application."""
+        import json
+        path = self._checkpoint_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mappings = ("rules", "bulletins", "cases", "proposals", "extracted_documents", "alerts", "official_sources")
+        data = {name: {k: v.model_dump(mode="json") for k, v in getattr(self, name).items()} for name in mappings}
+        data.update(updates=[v.model_dump(mode="json") for v in self.updates],
+                    source_history=[v.model_dump(mode="json") for v in self.source_history],
+                    audit_log=self.audit_log, demo_mode=self.demo_mode, clean_claims_target=self.clean_claims_target)
+        temporary = path.with_suffix(".tmp")
+        with open(temporary, "w", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(data, handle, default=str)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+
+    def load_checkpoint(self):
+        import json
+        path = self._checkpoint_path()
+        if path is None or not path.exists():
+            return
+        data = json.loads(path.read_text())
+        models = {"rules": Rule, "bulletins": PolicyBulletin, "cases": Case,
+                  "proposals": ProposedPolicyChange, "extracted_documents": ExtractedDocumentResult,
+                  "alerts": Alert, "official_sources": OfficialPolicySource}
+        for name, model in models.items():
+            setattr(self, name, {k: model.model_validate(v) for k, v in data[name].items()})
+        self.updates = [InsurerUpdateEntry.model_validate(v) for v in data["updates"]]
+        self.source_history = [SourceCheckHistory.model_validate(v) for v in data["source_history"]]
+        self.audit_log = data["audit_log"]
+        self.demo_mode = data["demo_mode"]
+        self.clean_claims_target = data["clean_claims_target"]
+        for source in self.official_sources.values():
+            if source.status == "connected" and not source.processed_at:
+                source.status = "active"
+            if source.status in {"checking", "fetched", "processing"}:
+                source.status = "extraction_failed"
+                source.error_message = "Previous check interrupted; document will be retried."
+
+    def __init__(self, persist=True):
         self.rules: Dict[str, Rule] = {}
         self.bulletins: Dict[str, PolicyBulletin] = {}
         self.cases: Dict[str, Case] = {}
@@ -49,13 +126,17 @@ class DataStore:
         self.is_check_failed: bool = False
         self.last_check_time: str = "Live"
         self.run_check_count: int = 0
-        self.demo_mode: bool = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1")
+        self.demo_mode: bool = os.environ.get("DEMO_MODE", "false").lower() in ("true", "1")
         self.official_sources: Dict[str, OfficialPolicySource] = {}
         self.source_history: List[SourceCheckHistory] = []
 
         # Start clean by default with zero demo entries
         self.reset_state(seed_demo=False)
+        self._persistent = persist
+        if persist:
+            self.load_checkpoint()
 
+    @serialized
     def record_audit(self, action: str, details: dict, actor: str = "system"):
         entry = {
             "entry_id": f"AUDIT-{len(self.audit_log) + 1:04d}",
@@ -67,23 +148,31 @@ class DataStore:
         self.audit_log.append(entry)
         return entry
 
+    @serialized
     def clear_demo_entries(self):
         """Purges all demo entries and caseload cases."""
         self.cases.clear()
+        self.alerts.clear()
         self.updates.clear()
         self.proposals.clear()
         self.extracted_documents.clear()
         self.record_audit("DEMO_ENTRIES_CLEARED", {"cases_count": 0}, actor="claims-officer")
 
+    @serialized
     def reset_state(self, seed_demo: bool = False):
         """Reset data state. By default seed_demo=False (clean slate)."""
+        self._generation = getattr(self, "_generation", 0) + 1
         self.rules.clear()
         self.bulletins.clear()
         self.cases.clear()
+        self.alerts.clear()
         self.updates.clear()
         self.proposals.clear()
         self.extracted_documents.clear()
         self.audit_log.clear()
+        self.alerts.clear()
+        self.official_sources.clear()
+        self.source_history.clear()
         self.clean_claims_target = 85.0
         self.is_check_failed = False
         self.last_check_time = "Live"
@@ -97,6 +186,7 @@ class DataStore:
     def reset_demo_state(self):
         """Reset data back to demo baseline with 40 cases (used by test runners)."""
         self.reset_state(seed_demo=True)
+        self.demo_mode = True
 
     def load_rules_and_bulletins(self):
         """Loads official insurer bulletins and versioned payer rules."""
@@ -108,7 +198,7 @@ class DataStore:
                 official_url="https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?ncdid=372",
                 policy_scope="National Coverage Determinations (NCDs) & Clinical Guidelines",
                 source_type="official_portal",
-                status="connected",
+                status="active",
                 is_real_external_source=True,
             )
 
@@ -402,6 +492,12 @@ class DataStore:
             action_guidance=["Prior authorization verified: claim ready for electronic submission."],
         )
         self.rules[f"{r_uhc_knee.rule_id}_v{r_uhc_knee.version}"] = r_uhc_knee
+        for rule in self.rules.values():
+            rule.is_synthetic = True
+            rule.source_title = f"Synthetic example: {rule.source_title or rule.rule_id}"
+        for bulletin in self.bulletins.values():
+            bulletin.status = "Synthetic example"
+            bulletin.summary = f"SYNTHETIC EXAMPLE — not verified current payer criteria. {bulletin.summary}"
 
     def load_demo_cases_and_updates(self):
         """Loads optional mock seed data for QA/test runners."""
@@ -611,6 +707,13 @@ class DataStore:
         re-checks all open cases, and moves 3 open cases (C-001, C-005, C-008)
         from Approved to Needs attention!
         """
+        if not self.demo_mode:
+            from app.impact.analyzer import run_impact_analysis
+            before = {c.case_id: c.status for c in self.cases.values()}
+            run_impact_analysis(data_store=self)
+            affected = [c.case_id for c in self.cases.values() if before[c.case_id] != c.status]
+            return {"success": True, "message": "Current approved rules re-evaluated. No unapproved updates applied.",
+                    "affected_case_ids": affected}
         self.run_check_count += 1
         self.last_check_time = "Just now"
 
@@ -647,7 +750,7 @@ class DataStore:
 
         return {
             "success": True,
-            "message": "Insurer rules checked: Rule R-1042 exclusion applied. 3 open cases moved to Needs attention.",
+            "message": "Synthetic demo check: Rule R-1042 exclusion applied to demo claims.",
             "affected_case_ids": affected_ids,
             "new_counts": {
                 "approved": sum(1 for c in self.cases.values() if c.status == "Approved"),
@@ -697,16 +800,12 @@ class DataStore:
     def get_bulletin(self, rule_id: str) -> Optional[PolicyBulletin]:
         """Returns official policy bulletin for a rule ID."""
         clean_id = rule_id.strip()
-        if clean_id in self.bulletins:
-            return self.bulletins[clean_id]
-        for bid, b in self.bulletins.items():
-            if bid in clean_id or clean_id in bid:
-                return b
-        return None
+        return self.bulletins.get(clean_id)
 
     # -------------------------------------------------------------
     # Multimodal Policy Proposals & Human Review Lifecycle
     # -------------------------------------------------------------
+    @serialized
     def save_proposal(self, proposal: ProposedPolicyChange):
         """Saves a proposed policy change pending human review."""
         self.proposals[proposal.proposal_id] = proposal
@@ -717,214 +816,90 @@ class DataStore:
     def get_all_proposals(self) -> List[ProposedPolicyChange]:
         return list(self.proposals.values())
 
+    @serialized
     def save_extracted_document(self, doc_result: ExtractedDocumentResult):
         self.extracted_documents[doc_result.document_id] = doc_result
         for p in doc_result.proposals:
             self.save_proposal(p)
 
     def get_extracted_document(self, doc_id: str) -> Optional[ExtractedDocumentResult]:
-        return self.extracted_documents.get(doc_id)
+        document = self.extracted_documents.get(doc_id)
+        if document:
+            return document.model_copy(update={"proposals": [self.proposals.get(p.proposal_id, p) for p in document.proposals]})
+        return None
 
-    def approve_proposal(
-        self,
-        proposal_id: str,
-        reviewer_notes: Optional[str] = None,
-        edited_fields: Optional[dict] = None,
-    ) -> Tuple[Rule, List[str]]:
-        """
-        Human reviewer approves a proposed policy change:
-        1. Validates and incorporates any reviewer corrections.
-        2. Clones/increments rule version into active rules.
-        3. Re-evaluates caseload and updates claim risk determinations.
-        4. Emits insurer update entry and records immutable audit log.
-        """
+    @serialized
+    @transactional
+    def approve_proposal(self, proposal_id: str, reviewer_notes=None, edited_fields=None):
+        from app.intelligence.rule_builder import build_proposed_rule
         proposal = self.proposals.get(proposal_id)
         if not proposal:
             raise ValueError(f"Proposal {proposal_id} not found.")
-
-        # Idempotency check: if already approved, return without creating duplicate rules
-        if proposal.review_state == "approved" and proposal.resulting_rule_id:
-            existing_rule_key = f"{proposal.resulting_rule_id}_v{proposal.resulting_rule_version or 1}"
-            return self.rules.get(existing_rule_key) or list(self.rules.values())[0], []
-
-        # Apply any reviewer corrections before committing
-        if edited_fields:
-            if "effective_from" in edited_fields and edited_fields["effective_from"]:
-                try:
-                    proposal.effective_from = datetime.strptime(str(edited_fields["effective_from"]), "%Y-%m-%d").date()
-                except Exception:
-                    pass
-            if "proposed_effect" in edited_fields and edited_fields["proposed_effect"]:
-                proposal.proposed_effect = RuleEffect(edited_fields["proposed_effect"])
-            if "target_code" in edited_fields and edited_fields["target_code"]:
-                proposal.target_code = str(edited_fields["target_code"]).strip()
-            if "target_name" in edited_fields and edited_fields["target_name"]:
-                proposal.target_name = str(edited_fields["target_name"]).strip()
-            if "policy_title" in edited_fields and edited_fields["policy_title"]:
-                proposal.policy_title = str(edited_fields["policy_title"]).strip()
-            if "insurer_id" in edited_fields and edited_fields["insurer_id"]:
-                proposal.insurer_id = str(edited_fields["insurer_id"]).strip().lower()
-
-        # Reject incomplete proposals — missing mandatory fields must be supplied before approval
-        missing_fields = []
-        if not proposal.insurer_id:
-            missing_fields.append("insurer_id")
-        if not proposal.target_code:
-            missing_fields.append("target_code")
-        if not proposal.proposed_effect:
-            missing_fields.append("proposed_effect")
-        if not proposal.effective_from and proposal.change_type != "cancelled":
-            missing_fields.append("effective_from")
-
-        if missing_fields:
-            raise ValueError(
-                f"Cannot approve incomplete proposal {proposal.proposal_id}. "
-                f"Missing mandatory fields: {', '.join(missing_fields)}. "
-                "Human reviewer must supply verified values before approval."
-            )
-
-        # Find existing rule to version or create new
-        p_code = proposal.target_code.upper().strip()
-        matching_rules = [
-            r for r in self.rules.values()
-            if r.target.code.upper().strip() == p_code
-            and (r.insurer_id == "*" or r.insurer_id == proposal.insurer_id)
-        ]
-
-        if matching_rules:
-            prior_rule = sorted(matching_rules, key=lambda r: r.version, reverse=True)[0]
-            rule_id = prior_rule.rule_id
-            new_version = prior_rule.version + 1
-            prior_rule.status = RuleStatus.SUPERSEDED
-        else:
-            rule_id = proposal.policy_reference or f"R-{p_code}"
-            new_version = 1
-
-        rule_cat = RuleCategory.DRUG if proposal.target_type == "drug" else (
-            RuleCategory.PROCEDURE if proposal.target_type == "procedure" else RuleCategory.SERVICE
-        )
-
-        eff_date = proposal.effective_from or date.today()
-
-        new_rule = Rule(
-            rule_id=rule_id,
-            version=new_version,
-            insurer_id=proposal.insurer_id,
-            plan_ids=proposal.plan_ids or ["*"],
-            category=rule_cat,
-            target=Target(
-                type=proposal.target_type or "drug",
-                code=proposal.target_code,
-                name=proposal.target_name or proposal.target_code,
-            ),
-            effect=proposal.proposed_effect,
-            conditions=proposal.conditions,
-            status=RuleStatus.EFFECTIVE if proposal.change_type != "cancelled" else RuleStatus.CANCELLED,
-            effective_from=eff_date,
-            effective_to=proposal.effective_to,
-            source_ref=f"approved-doc:{proposal.document_name}",
-            source_title=proposal.policy_title,
-            bulletin_summary=f"{proposal.policy_title} (Approved by reviewer).",
-            action_guidance=[f"Review requirements for {proposal.target_name or proposal.target_code} under policy {rule_id}."],
-        )
-        self.rules[f"{new_rule.rule_id}_v{new_rule.version}"] = new_rule
-
-        # Update policy bulletin for instant clinical citation review
-        bulletin_status = "Active / Revised" if new_version > 1 else "Active / Announced"
-        if proposal.change_type == "delayed":
-            bulletin_status = "Delayed Effective Date"
-
-        self.bulletins[rule_id] = PolicyBulletin(
-            rule_id=rule_id,
-            title=proposal.policy_title or f"Policy Mandate {rule_id}",
-            insurer_name=proposal.insurer_name or (proposal.insurer_id.upper() if proposal.insurer_id else "Authorized Insurer"),
-            effective_date=eff_date.strftime("%d %b %Y"),
-            last_reviewed=utc_now().strftime("%d %b %Y"),
-            status=bulletin_status,
-            policy_type=f"{(proposal.target_type or 'Clinical').title()} Coverage Policy Mandate",
-            summary=f"Official policy mandate extracted from '{proposal.document_name}' and approved by hospital reviewer. Quotation: \"{proposal.supporting_quote}\"",
-            coverage_criteria=[
-                f"Applies to {proposal.target_name or proposal.target_code} ({proposal.target_code}).",
-                f"Effective date: {eff_date.strftime('%B %d, %Y')}.",
-                f"Required status: {proposal.proposed_effect.value.replace('_', ' ').title()}.",
-            ],
-            denial_risk=f"Claims submitted without complying with {rule_id} are at risk of payer rejection.",
-            official_reference_url=None,
-        )
-
-        # Re-evaluate all open claims in caseload containing the targeted item
-        affected_case_ids: List[str] = []
-        active_rules = list(self.rules.values())
-        for cid, case in self.cases.items():
-            if not any(item.code.upper().strip() == p_code for item in case.items):
-                continue
-
-            check_res = evaluate_case(case, active_rules, governing_date=case.service_date)
-            for iv in check_res.results:
-                if iv.item.code.upper().strip() == p_code:
-                    if iv.result != "Covered":
-                        case.status = "Needs attention"
-                        affected_case_ids.append(cid)
-                    elif proposal.change_type == "delayed" and case.status == "Needs attention":
-                        # Recalculate entire claim: if other restrictions exist, status stays Needs attention!
-                        case.status = check_res.status
-                        affected_case_ids.append(cid)
-
-        # Add update entry to Updates list
-        headline = (
-            f"{proposal.insurer_name} postpones {proposal.target_name or proposal.target_code} exclusion to {eff_date.strftime('%d %b %Y')}"
-            if proposal.change_type == "delayed"
-            else f"{proposal.insurer_name} updates {proposal.target_name or proposal.target_code} ({new_rule.effect.value.replace('_', ' ').title()})"
-        )
-        status_label = "Delayed" if proposal.change_type == "delayed" else (
-            "Cancelled" if proposal.change_type == "cancelled" else (
-                "Announced" if eff_date > date(2026, 10, 24) else "Effective"
-            )
-        )
-        update_entry = InsurerUpdateEntry(
-            update_id=f"UPD-{len(self.updates) + 1:03d}",
-            headline=headline,
-            item_type=proposal.target_type if proposal.target_type in ["drug", "procedure"] else "document",
-            effective_date=eff_date.strftime("%d %b %Y"),
-            status=status_label,
-            affected_cases_count=len(affected_case_ids),
-            affected_case_ids=affected_case_ids,
-            rule_id=rule_id,
-            rule_version=new_version,
-            published_at=utc_now(),
-        )
-        self.updates.insert(0, update_entry)
-
-        # Update proposal state
+        if proposal.review_state == "approved":
+            rule = self.rules.get(f"{proposal.resulting_rule_id}_v{proposal.resulting_rule_version}")
+            if rule is None:
+                raise ValueError("Approved proposal's rule is missing; restore the checkpoint before retrying.")
+            return rule, []
+        if proposal.review_state == "rejected":
+            raise ValueError("Rejected proposals cannot be approved. Extract a new proposal for review.")
+        # Validate a copy: a rejected edit must not partially mutate stored evidence.
+        allowed = {"insurer_id", "insurer_name", "plan_ids", "target_type", "target_code", "target_name",
+                   "policy_title", "policy_reference", "proposed_effect", "effective_from", "effective_to",
+                   "conditions", "change_type", "evidence_confirmed_by_reviewer"}
+        edits = edited_fields or {}
+        if set(edits) - allowed:
+            raise ValueError("Unsupported reviewer correction field.")
+        proposal = ProposedPolicyChange.model_validate({**proposal.model_dump(), **edits})
+        if proposal.evidence_confirmed_by_reviewer and not reviewer_notes:
+            raise ValueError("Record how the original evidence was visually verified in reviewer notes.")
+        new_rule = build_proposed_rule(proposal, self.get_all_rules())
+        before = {c.case_id: evaluate_case(c, self.get_all_rules()) for c in self.cases.values()}
         proposal.review_state = "approved"
         proposal.approved_at = utc_now()
-        proposal.resulting_rule_id = rule_id
-        proposal.resulting_rule_version = new_version
-        if reviewer_notes:
-            proposal.reviewer_notes = reviewer_notes
-
-        # Synchronize active alerts feed through deterministic impact analyzer
-        try:
-            from app.impact.analyzer import run_impact_analysis
-            run_impact_analysis(source_event_desc=f"Approved policy proposal {proposal_id}")
-        except Exception as e:
-            print(f"Impact analyzer sync warning: {e}")
-
-        self.record_audit(
-            "POLICY_PROPOSAL_APPROVED",
-            {
-                "proposal_id": proposal_id,
-                "rule_id": rule_id,
-                "version": new_version,
-                "document": proposal.document_name,
-                "affected_cases_count": len(affected_case_ids),
-                "affected_case_ids": affected_case_ids,
-            },
-            actor="claims-reviewer",
+        proposal.resulting_rule_id = new_rule.rule_id
+        proposal.resulting_rule_version = new_rule.version
+        proposal.reviewer_notes = reviewer_notes
+        self.proposals[proposal_id] = proposal
+        for source in self.official_sources.values():
+            source.pending_proposal_ids = [pid for pid in source.pending_proposal_ids if pid != proposal_id]
+            if not source.pending_proposal_ids and source.status == "pending_review":
+                source.status = "connected"
+        self.rules[f"{new_rule.rule_id}_v{new_rule.version}"] = new_rule
+        self.bulletins[new_rule.rule_id] = PolicyBulletin(
+            rule_id=new_rule.rule_id, title=proposal.policy_title or new_rule.rule_id,
+            insurer_name=proposal.insurer_name or proposal.insurer_id,
+            effective_date=str(new_rule.effective_from), last_reviewed=utc_now().date().isoformat(),
+            status="Cancelled" if proposal.change_type == "cancelled" else "Human reviewed",
+            policy_type=f"{proposal.target_type} policy", summary=proposal.supporting_quote,
+            coverage_criteria=[f"Plans: {', '.join(proposal.plan_ids)}", f"Effect: {new_rule.effect.value}"],
+            denial_risk="Review the deterministic item assessment before submission.",
+            official_reference_url=proposal.source_url,
         )
+        from app.impact.analyzer import run_impact_analysis
+        run_impact_analysis(source_event_desc=f"Approved {proposal_id}", data_store=self)
+        affected = []
+        for case in self.cases.values():
+            after = evaluate_case(case, self.get_all_rules())
+            if [i.result for i in before[case.case_id].results] != [i.result for i in after.results]:
+                affected.append(case.case_id)
+        self.updates.insert(0, InsurerUpdateEntry(
+            update_id=f"UPD-{__import__('uuid').uuid4().hex[:12]}",
+            headline=f"{proposal.insurer_name or proposal.insurer_id}: {proposal.target_name or proposal.target_code} policy {proposal.change_type}",
+            item_type=proposal.target_type if proposal.target_type in {"drug", "procedure"} else "document",
+            effective_date=str(new_rule.effective_from),
+            status="Delayed" if proposal.change_type == "delayed" else "Cancelled" if proposal.change_type == "cancelled" else "Announced" if new_rule.effective_from > utc_now().date() else "Effective",
+            affected_cases_count=len(affected), affected_case_ids=affected,
+            rule_id=new_rule.rule_id, rule_version=new_rule.version,
+        ))
+        self.record_audit("POLICY_PROPOSAL_APPROVED", {
+            "proposal_id": proposal_id, "rule_id": new_rule.rule_id, "version": new_rule.version,
+            "document": proposal.document_name, "affected_cases_count": len(affected),
+            "affected_case_ids": affected, "reviewer_corrections": edits,
+        }, actor="claims-reviewer")
+        self.save_checkpoint()
+        return new_rule, affected
 
-        return new_rule, affected_case_ids
-
+    @serialized
     def reject_proposal(
         self,
         proposal_id: str,
@@ -935,8 +910,14 @@ class DataStore:
         if not proposal:
             raise ValueError(f"Proposal {proposal_id} not found.")
 
+        if proposal.review_state == "approved":
+            raise ValueError("Approved proposals cannot be rejected; review a versioned cancellation instead.")
         proposal.review_state = "rejected"
         proposal.reviewer_notes = reviewer_notes
+        for source in self.official_sources.values():
+            source.pending_proposal_ids = [pid for pid in source.pending_proposal_ids if pid != proposal_id]
+            if not source.pending_proposal_ids and source.status == "pending_review":
+                source.status = "connected"
 
         self.record_audit(
             "POLICY_PROPOSAL_REJECTED",
@@ -1026,9 +1007,11 @@ class DataStore:
     def get_source(self, source_id: str) -> Optional[OfficialPolicySource]:
         return self.official_sources.get(source_id)
 
+    @serialized
     def save_source(self, source: OfficialPolicySource):
         self.official_sources[source.source_id] = source
 
+    @serialized
     def add_source_history(self, history: SourceCheckHistory):
         self.source_history.insert(0, history)
 

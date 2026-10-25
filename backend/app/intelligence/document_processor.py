@@ -23,8 +23,8 @@ SUPPORTED_MIME_TYPES = {
     "image/jpg": "jpeg",
     "image/webp": "webp",
     "text/plain": "txt",
-    "text/html": "txt",
-    "application/xhtml+xml": "txt",
+    "text/html": "html",
+    "application/xhtml+xml": "html",
 }
 
 
@@ -39,7 +39,7 @@ def detect_file_type(filename: str, mime_type: Optional[str] = None) -> str:
         if ext == "jpg":
             return "jpeg"
         if ext in ["html", "htm"]:
-            return "txt"
+            return "html"
         return ext
 
     if mime_type:
@@ -91,6 +91,13 @@ def process_uploaded_document(
     file_type = detect_file_type(filename, mime_type)
     doc_id = f"DOC-{uuid.uuid4().hex[:8].upper()}"
 
+    if file_bytes.startswith(b"%PDF-"):
+        file_type = "pdf"
+    if file_type == "html":
+        text, title, links = extract_policy_html(file_bytes)
+        result = _process_text(text.encode("utf-8"), filename, doc_id)
+        result.update(file_type="html", policy_title=title, linked_pdfs=links)
+        return result
     if file_type == "txt":
         return _process_text(file_bytes, filename, doc_id)
     elif file_type in ["png", "jpeg", "webp"]:
@@ -108,13 +115,6 @@ def _process_text(file_bytes: bytes, filename: str, doc_id: str) -> Dict[str, An
     except UnicodeDecodeError:
         text = file_bytes.decode("latin-1", errors="replace")
 
-    # If HTML document, strip tags to extract clean readable policy text
-    if filename.lower().endswith((".html", ".htm")) or "<html" in text.lower():
-        text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", text, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r"<(br|p|div|h[1-6]|li)[^>]*>", "\n", text, flags=re.IGNORECASE)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
     return {
         "document_id": doc_id,
@@ -138,6 +138,15 @@ def _process_text(file_bytes: bytes, filename: str, doc_id: str) -> Dict[str, An
 
 def _process_image(file_bytes: bytes, filename: str, file_type: str, doc_id: str) -> Dict[str, Any]:
     """Handles scanned policy images and photos."""
+    import io
+    from PIL import Image
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as image:
+            if image.format not in {"PNG", "JPEG", "WEBP"} or image.width * image.height > 20_000_000:
+                raise ValueError("Invalid image dimensions or format")
+            image.verify()
+    except Exception:
+        raise DocumentProcessingError("Invalid image or image exceeds 20 megapixel limit.") from None
     mime = f"image/{'jpeg' if file_type == 'jpeg' else file_type}"
     b64 = base64.b64encode(file_bytes).decode("utf-8")
     preview_uri = f"data:{mime};base64,{b64}"
@@ -352,42 +361,41 @@ def _process_pdf_with_pypdf(file_bytes: bytes, filename: str, doc_id: str) -> Di
 
 
 def _fallback_raw_pdf_processor(file_bytes: bytes, filename: str, doc_id: str) -> Dict[str, Any]:
-    """Raw stream regex parser as last-mile resilience if pypdf fails."""
-    text_content = ""
-    try:
-        raw_str = file_bytes.decode("latin-1", errors="ignore")
-        stream_matches = re.findall(r"stream[\r\n]+(.*?)[\r\n]+endstream", raw_str, re.DOTALL)
-        extracted = []
-        for s in stream_matches:
-            printable = re.sub(r"[^\x20-\x7E\n\r\t]", " ", s)
-            cleaned = " ".join(printable.split())
-            if len(cleaned) > 20:
-                extracted.append(cleaned)
-        text_content = "\n".join(extracted)
-    except Exception:
-        pass
+    raise DocumentProcessingError("PDF support is unavailable. Install the backend requirements before processing PDFs.")
 
-    if not text_content.strip():
-        text_content = "PDF document uploaded."
 
-    return {
-        "document_id": doc_id,
-        "filename": filename,
-        "file_type": "pdf",
-        "page_count": 1,
-        "total_pages": 1,
-        "pages": [
-            {
-                "page": 1,
-                "text": text_content,
-                "preview_image": None,
-                "is_scanned": True,
-                "spans": [],
-            }
-        ],
-        "raw_text": text_content,
-        "primary_image_b64": None,
-        "primary_mime": None,
-        "scanned_page_images": [],
-        "warnings": [],
-    }
+def extract_policy_html(file_bytes: bytes):
+    """Parse policy content, preserving headings and excluding page chrome.
+
+    CMS MCD pages use a content panel; main/article also support public CMS pages.
+    A body fallback handles simple notices, but never invents missing policy text.
+    """
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(file_bytes, "html.parser")
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    # CMS ASP.NET pages wrap all policy content in a form. Remove controls,
+    # never the form container itself.
+    for node in soup.select("script, style, nav, header, footer, aside, input, button, select, textarea, noscript, template, [hidden], [aria-hidden='true'], [role='navigation'], [role='contentinfo'], .breadcrumb, .breadcrumbs, .menu, .cookie-banner"):
+        node.decompose()
+    # Select the smallest known CMS policy container before general page wrappers.
+    section = None
+    cms_policy = soup.select_one("#pnlDescriptionInformation")
+    if cms_policy:
+        # MCD wraps navigation, FAQs and help drawers in main. Only the official
+        # title, tracking/effective dates and policy description belong in its hash.
+        nodes = soup.select("#h1PageTitle, #pnlTrackingInformation, #pnlDescriptionInformation")
+        section = BeautifulSoup("".join(str(node) for node in nodes), "html.parser")
+    else:
+        for selector in ("#ctl00_ctl00_ContentPlaceHolder1_ContentPlaceHolder1_pnlNCD", "#ncdDetails", "#lcdDetails", "article", "main", "[role='main']", "#main-content"):
+            section = soup.select_one(selector)
+            if section:
+                break
+    section = section or soup.body or soup
+    links = [a.get("href") for a in section.select("a[href]") if ".pdf" in a.get("href", "").lower().split("?")[0]]
+    text = "\n".join(line.strip() for line in section.get_text("\n", strip=True).splitlines() if line.strip())
+    if len(text) < 20:
+        raise DocumentProcessingError("HTML contains no meaningful policy text.")
+    # The heading in the selected policy is authoritative; browser titles often add site branding.
+    heading = section.find(["h1", "h2"])
+    policy_title = heading.get_text(" ", strip=True) if heading else title
+    return text, policy_title, links

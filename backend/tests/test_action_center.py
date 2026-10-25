@@ -8,7 +8,7 @@ from app.db.store import store
 from app.domain.models import Alert, AlertChange, AlertStatus, AlertTask, utc_now
 from app.intake.analyzer import redact_sensitive_identifiers, analyze_clinical_document
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 
 
 def test_redact_sensitive_identifiers():

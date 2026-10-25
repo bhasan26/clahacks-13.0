@@ -64,7 +64,7 @@ export const UpdatesPage: React.FC<UpdatesPageProps> = ({
           Insurer Updates & Policy Action Center
         </h1>
         <p className="text-xs text-[#12544F]/70 mt-0.5">
-          Recent policy, formulary, and prior authorization updates received from the insurer with autonomous claim impact tracking.
+          Human-reviewed policy updates and synthetic demo notices, with claim-impact tracking.
         </p>
       </div>
 

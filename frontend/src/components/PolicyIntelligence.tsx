@@ -17,6 +17,8 @@ import {
   checkOfficialSource,
   fetchDemoMode,
   setDemoMode,
+  fetchPolicyProposal,
+  fetchExtractedDocument,
 } from '../api';
 
 interface PolicyIntelligenceProps {
@@ -59,8 +61,13 @@ export const PolicyIntelligence: React.FC<PolicyIntelligenceProps> = ({
   // Editable fields for human review
   const [editedTitle, setEditedTitle] = useState('');
   const [editedCode, setEditedCode] = useState('');
+  const [editedInsurer, setEditedInsurer] = useState('');
+  const [editedPlans, setEditedPlans] = useState('');
+  const [editedType, setEditedType] = useState<'drug' | 'procedure' | 'service' | ''>('');
+  const [evidenceConfirmed, setEvidenceConfirmed] = useState(false);
+  const [reviewToken, setReviewToken] = useState(sessionStorage.getItem('coverageguard-reviewer-token') || '');
   const [editedName, setEditedName] = useState('');
-  const [editedEffect, setEditedEffect] = useState<'covered' | 'excluded' | 'requires_prior_approval' | 'requires_documents'>('excluded');
+  const [editedEffect, setEditedEffect] = useState<'covered' | 'excluded' | 'requires_prior_approval' | 'requires_documents' | ''>('');
   const [editedEffectiveDate, setEditedEffectiveDate] = useState('');
   const [reviewerNotes, setReviewerNotes] = useState('');
 
@@ -213,10 +220,14 @@ Submissions without an approved authorization reference will be rejected under c
 
   // Helper to initialize edit fields from proposal
   const loadProposalIntoForm = (p: ProposedPolicyChange) => {
+    setEvidenceConfirmed(p.evidence_confirmed_by_reviewer || false);
     setEditedTitle(p.policy_title || '');
     setEditedCode(p.target_code || '');
     setEditedName(p.target_name || p.target_code || '');
-    setEditedEffect(p.proposed_effect || 'excluded');
+    setEditedEffect(p.proposed_effect || '');
+    setEditedInsurer(p.insurer_id || '');
+    setEditedPlans(p.plan_ids.join(', '));
+    setEditedType(p.target_type || '');
     setEditedEffectiveDate(p.effective_from || '');
     setReviewerNotes(p.reviewer_notes || '');
     setHighlightedQuote(p.supporting_quote || '');
@@ -283,13 +294,17 @@ Submissions without an approved authorization reference will be rejected under c
     try {
       const currentProp = {
         ...docResult.proposals[activeProposalIndex],
+        evidence_confirmed_by_reviewer: evidenceConfirmed,
         policy_title: editedTitle,
         target_code: editedCode,
         target_name: editedName,
-        proposed_effect: editedEffect,
-        effective_from: editedEffectiveDate,
+        insurer_id: editedInsurer,
+        plan_ids: editedPlans.split(',').map(p => p.trim()).filter(Boolean),
+        target_type: editedType || null,
+        proposed_effect: editedEffect || null,
+        effective_from: editedEffectiveDate || null,
       };
-      const preview = await previewPolicyImpact([currentProp]);
+      const preview = await previewPolicyImpact(docResult.proposals.map((p, i) => i === activeProposalIndex ? currentProp : p));
       setImpactResult(preview);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to calculate claim impact preview.');
@@ -306,14 +321,20 @@ Submissions without an approved authorization reference will be rejected under c
     setErrorMessage(null);
     try {
       const editedFields = {
+        evidence_confirmed_by_reviewer: evidenceConfirmed,
         policy_title: editedTitle,
         target_code: editedCode,
         target_name: editedName,
-        proposed_effect: editedEffect,
-        effective_from: editedEffectiveDate,
+        insurer_id: editedInsurer,
+        plan_ids: editedPlans.split(',').map(p => p.trim()).filter(Boolean),
+        target_type: editedType || null,
+        proposed_effect: editedEffect || null,
+        effective_from: editedEffectiveDate || null,
       };
 
       const res = await approvePolicyProposal(prop.proposal_id, reviewerNotes, editedFields);
+      setDocResult({ ...docResult, proposals: docResult.proposals.map(p => p.proposal_id === prop.proposal_id ? { ...p, review_state: 'approved', resulting_rule_id: res.rule.rule_id, resulting_rule_version: res.rule.version } : p) });
+      await loadSourcesAndSettings();
       setApprovalSuccess({
         ruleId: res.rule.rule_id,
         version: res.rule.version,
@@ -386,6 +407,12 @@ Submissions without an approved authorization reference will be rejected under c
         )}
       </div>
 
+      <div className="flex flex-wrap gap-4 items-center text-xs">
+              <label className="text-xs">Reviewer token (if configured)
+                <input aria-label="Reviewer token" type="password" value={reviewToken} onChange={e => { setReviewToken(e.target.value); sessionStorage.setItem('coverageguard-reviewer-token', e.target.value); }} className="w-full p-2 border rounded-xl" />
+              </label>
+        <p>Synthetic documents only. Text redaction is partial; images are not de-identified.</p>
+      </div>
       {/* Error Message Alert */}
       {errorMessage && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-900 text-xs flex items-start gap-3">
@@ -436,15 +463,15 @@ Submissions without an approved authorization reference will be rejected under c
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-black text-[#092328] uppercase tracking-wider">
-                  Official Insurer Policy Sources (Continuous Sentinel)
+                  Official Public Policy Sources
                 </h2>
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#EBF4EE] text-[#2A835F] border border-[#D5E2D9] flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#2A835F] animate-pulse" />
-                  Live Real-World Insurer Connection
+                  Public CMS Source
                 </span>
               </div>
               <p className="text-xs text-[#698579]">
-                Automated change-detection sentinel for official public insurer policy portals using SHA-256 content fingerprints.
+                Monitor the configured public CMS policy page. Background monitoring is {sourcesStatus?.scheduler_enabled ? 'enabled' : 'off; use Check Source Now'}.
               </p>
             </div>
           </div>
@@ -463,7 +490,7 @@ Submissions without an approved authorization reference will be rejected under c
               }`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${isDemoMode ? 'bg-purple-600' : 'bg-emerald-400'}`} />
-              <span>{isDemoMode ? 'Synthetic Demo Data' : 'Live Caseload (0 Fake Claims)'}</span>
+              <span>{isDemoMode ? 'Synthetic Demo Data' : 'Entered Synthetic Caseload'}</span>
             </button>
           </div>
         </div>
@@ -521,17 +548,28 @@ Submissions without an approved authorization reference will be rejected under c
                   <span className="text-[#698579] block text-[10px]">Monitoring Status:</span>
                   <span className="font-bold text-[11px] text-[#2A835F] flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#2A835F]" />
-                    {src.status.toUpperCase()}
+                    {src.status.replace(/_/g, ' ').toUpperCase()}
                   </span>
                 </div>
               </div>
 
+              {src.pending_proposal_ids.length > 0 && <button type="button" className="text-xs underline text-[#2A835F]" onClick={async () => {
+                try {
+                  const proposal = await fetchPolicyProposal(src.pending_proposal_ids[0]);
+                  const document = await fetchExtractedDocument(proposal.document_id);
+                  setDocResult(document);
+                  const index = document.proposals.findIndex(p => p.proposal_id === proposal.proposal_id);
+                  setActiveProposalIndex(Math.max(0, index));
+                  loadProposalIntoForm(proposal);
+                  setImpactResult(document.impact_preview || null);
+                } catch (error: any) { setErrorMessage(error.message || 'Unable to load pending source review.'); }
+              }}>Review staged source proposal ({src.pending_proposal_ids.length})</button>}
               {latestSourceHistory && latestSourceHistory.source_id === src.source_id && (
                 <div className="p-2.5 rounded-lg bg-white border border-[#D5E2D9] text-[11px] text-[#092328] space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-bold text-[#698579]">
                     <span>LATEST CHECK RESULT ({new Date(latestSourceHistory.checked_at).toLocaleTimeString()})</span>
                     <span className={latestSourceHistory.changed ? 'text-amber-700' : 'text-emerald-700'}>
-                      {latestSourceHistory.changed ? '● REVISION DETECTED' : '✓ UNCHANGED'}
+                      {latestSourceHistory.status.replace(/_/g, ' ').toUpperCase()}
                     </span>
                   </div>
                   <p className="text-[11px] text-[#698579] leading-tight">{latestSourceHistory.summary}</p>
@@ -863,8 +901,9 @@ Submissions without an approved authorization reference will be rejected under c
                   </label>
                   <input
                     type="text"
-                    disabled
-                    value={activeProposal.insurer_name}
+                    value={editedInsurer}
+                    onChange={(e) => setEditedInsurer(e.target.value)}
+                    placeholder="Verified insurer ID"
                     className="w-full px-3 py-2 rounded-xl border border-[#E8EFEA] bg-[#F8FAF9] text-xs text-[#092328] font-semibold"
                   />
                 </div>
@@ -874,8 +913,9 @@ Submissions without an approved authorization reference will be rejected under c
                   </label>
                   <input
                     type="text"
-                    disabled
-                    value={activeProposal.plan_ids.join(', ') || 'All Commercial (*)'}
+                    value={editedPlans}
+                    onChange={(e) => setEditedPlans(e.target.value)}
+                    placeholder="Plan IDs; * only when all plans are verified"
                     className="w-full px-3 py-2 rounded-xl border border-[#E8EFEA] bg-[#F8FAF9] text-xs text-[#092328] font-semibold"
                   />
                 </div>
@@ -918,6 +958,7 @@ Submissions without an approved authorization reference will be rejected under c
                     onChange={(e) => setEditedEffect(e.target.value as any)}
                     className="w-full px-3 py-2 rounded-xl border border-[#D5E2D9] text-xs font-bold text-[#092328] focus:ring-2 focus:ring-[#2A835F] focus:outline-hidden"
                   >
+                    <option value="">Unknown — verify effect</option>
                     <option value="excluded">Non-Covered / Excluded</option>
                     <option value="requires_prior_approval">Requires Prior Authorization</option>
                     <option value="requires_documents">Requires Clinical Documentation</option>
@@ -937,7 +978,11 @@ Submissions without an approved authorization reference will be rejected under c
                 </div>
               </div>
 
-              {/* Reviewer Notes */}
+              {!activeProposal.evidence_verified && <label className="flex gap-2 items-start text-xs text-amber-900">
+              <input type="checkbox" checked={evidenceConfirmed} onChange={e => setEvidenceConfirmed(e.target.checked)} />
+              I verified the complete supporting quotation against the original document. I recorded the verification in review notes.
+            </label>}
+            {/* Reviewer Notes */}
               <div>
                 <label className="block text-[11px] font-bold text-[#698579] mb-1">
                   Claims Officer Review Notes (Recorded in Audit Trail)
@@ -952,14 +997,24 @@ Submissions without an approved authorization reference will be rejected under c
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs">Verified item type
+                <select aria-label="Verified item type" value={editedType} onChange={e => setEditedType(e.target.value as any)} className="w-full p-2 border rounded-xl">
+                  <option value="">Unknown — verify type</option><option value="drug">Drug</option><option value="procedure">Procedure</option><option value="service">Service</option>
+                </select>
+              </label>
+
+            </div>
+            <p className="text-xs text-[#698579]">Synthetic documents only. Images and scanned pages are sent to Gemini as uploaded and are not de-identified. Verify evidence visually and record corrections in review notes.</p>
+            {docResult?.extraction_method && <p className="text-xs">Extraction: {docResult.extraction_method}. {docResult.extraction_error || ''}</p>}
             {/* Action Bar: What-If Preview vs Approve */}
-            {(!editedCode.trim() || !editedEffectiveDate.trim()) && (
+            {(!editedCode.trim() || !editedEffectiveDate.trim() || !editedInsurer.trim() || !editedPlans.trim() || !editedType || !editedEffect || (!activeProposal?.evidence_verified && (!evidenceConfirmed || !reviewerNotes.trim()))) && (
               <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs font-medium space-y-1">
                 <div className="font-bold flex items-center gap-1.5 text-amber-800">
                   <span>⚠️ Verification Required Before Approval</span>
                 </div>
                 <p className="text-[11px] leading-relaxed">
-                  CoverageGuard prevents unverified policy activation. The uploaded document does not contain an exact billing code or effective date. Please supply verified values in the fields above before submitting approval.
+                  CoverageGuard prevents unverified policy activation. The uploaded document has missing policy fields. Please supply verified insurer, plans, type, code, effect and date in the fields above before submitting approval.
                 </p>
               </div>
             )}
@@ -987,7 +1042,7 @@ Submissions without an approved authorization reference will be rejected under c
                 </button>
                 <button
                   type="button"
-                  disabled={isApproving || activeProposal.review_state === 'approved' || !editedCode.trim() || !editedEffectiveDate.trim()}
+                  disabled={isApproving || activeProposal.review_state === 'approved' || !editedCode.trim() || !editedEffectiveDate.trim() || !editedInsurer.trim() || !editedPlans.trim() || !editedType || !editedEffect || (!activeProposal?.evidence_verified && (!evidenceConfirmed || !reviewerNotes.trim()))}
                   onClick={handleApprove}
                   className="px-5 py-2.5 rounded-xl bg-[#092328] hover:bg-[#2A835F] text-white text-xs font-black transition-all shadow-md cursor-pointer disabled:opacity-50 flex items-center gap-2"
                 >
@@ -998,8 +1053,8 @@ Submissions without an approved authorization reference will be rejected under c
                     </>
                   ) : activeProposal.review_state === 'approved' ? (
                     <span>✓ Policy Approved</span>
-                  ) : (!editedCode.trim() || !editedEffectiveDate.trim()) ? (
-                    <span>⚠️ Missing Code / Date</span>
+                  ) : (!editedCode.trim() || !editedEffectiveDate.trim() || !editedInsurer.trim() || !editedPlans.trim() || !editedType || !editedEffect || (!activeProposal?.evidence_verified && (!evidenceConfirmed || !reviewerNotes.trim()))) ? (
+                    <span>⚠️ Missing Policy Fields</span>
                   ) : (
                     <span>Approve & Apply Policy →</span>
                   )}
@@ -1027,6 +1082,7 @@ Submissions without an approved authorization reference will be rejected under c
             </span>
           </div>
 
+          {impactResult.notice && <p className="text-xs text-amber-900 bg-amber-50 p-3 rounded-xl">{impactResult.notice}</p>}
           {/* KPI Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 rounded-xl bg-[#F8FAF9] border border-[#E8EFEA]">
@@ -1042,7 +1098,7 @@ Submissions without an approved authorization reference will be rejected under c
               <span className="text-xl font-black">{impactResult.new_risks}</span>
             </div>
             <div className="p-3.5 rounded-xl bg-[#EBF4EE] border border-[#2A835F]/30 text-[#2A835F]">
-              <span className="block text-[11px] font-medium">Unchanged Clean Claims</span>
+              <span className="block text-[11px] font-medium">Unchanged Claims</span>
               <span className="text-xl font-black">{impactResult.unchanged_cases}</span>
             </div>
           </div>
@@ -1095,7 +1151,7 @@ Submissions without an approved authorization reference will be rejected under c
             </div>
           ) : (
             <div className="py-6 text-center text-xs text-[#2A835F] font-bold bg-[#EBF4EE] rounded-xl border border-[#2A835F]/20">
-              ✓ Clean Simulation: No open hospital claims are affected by this policy change.
+              {impactResult.total_cases_checked === 0 ? 'No pending claims available for analysis.' : impactResult.notice ? 'Review the simulation notice before interpreting this result.' : 'No claim verdicts changed in this preview.'}
             </div>
           )}
         </div>

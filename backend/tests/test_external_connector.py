@@ -23,7 +23,7 @@ from app.connectors.change_detector import check_source_for_changes
 from app.connectors.scheduler import start_source_scheduler, stop_source_scheduler
 from app.db.store import store
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 
 
 # ===========================================================================
@@ -91,7 +91,7 @@ def test_connector_http_access_restricted_403():
         mock_get.return_value = mock_resp
 
         with pytest.raises(SourceAccessError) as excinfo:
-            connector.fetch_latest_document("https://restricted.payer.com/docs")
+            connector.fetch_latest_document("https://www.cms.gov/restricted-docs")
         assert "restricted" in str(excinfo.value).lower()
         assert "does not bypass paywalls" in str(excinfo.value).lower()
 
@@ -130,20 +130,21 @@ def test_change_detection_initial_baseline():
     history = check_source_for_changes(source, override_content=content)
 
     assert history.changed is True
-    assert history.status == "baseline_established"
+    assert history.status == "pending_review"
     assert history.content_hash is not None
 
     # Source updated in store
     saved_source = store.get_source("src-test-initial")
     assert saved_source.content_hash == history.content_hash
-    assert saved_source.status == "connected"
+    assert saved_source.status == "pending_review"
 
 
 def test_change_detection_unchanged_document():
     """Subsequent check with identical content reports unchanged and creates zero duplicate proposals."""
     connector = CMSMedicareConnector()
     content = b"<html><body>CMS Policy Bulletin: DRUG-A is excluded from commercial plans.</body></html>"
-    h = connector.compute_fingerprint(content)
+    from app.intelligence.document_processor import process_uploaded_document
+    h = connector.compute_fingerprint(process_uploaded_document(content, "policy.html")["raw_text"].encode())
 
     source = OfficialPolicySource(
         source_id="src-test-unchanged",
@@ -194,7 +195,7 @@ def test_change_detection_triggers_staged_proposals_without_direct_rule_mutation
     history = check_source_for_changes(source, override_content=new_content)
 
     assert history.changed is True
-    assert history.status == "change_detected"
+    assert history.status == "pending_review"
     assert history.content_hash != initial_hash
 
     # Proposals were staged
@@ -202,7 +203,8 @@ def test_change_detection_triggers_staged_proposals_without_direct_rule_mutation
     staged_proposal_id = history.proposals_created[0]
     staged_proposal = store.get_proposal(staged_proposal_id)
     assert staged_proposal is not None
-    assert staged_proposal.review_state == "pending_review"
+    assert staged_proposal.review_state == "needs_correction"
+    assert "plan_ids" in staged_proposal.missing_fields
 
     # ACTIVE RULES MUST NOT BE MUTATED WITHOUT REVIEWER APPROVAL!
     rules_after = len(store.get_all_rules())
@@ -222,13 +224,13 @@ def test_change_detection_timeout_records_error_history():
     with patch("app.connectors.official_policy_source.CMSMedicareConnector.fetch_latest_document", side_effect=SourceTimeoutError("Timeout after 15s")):
         history = check_source_for_changes(source)
 
-    assert history.status == "error"
+    assert history.status == "source_unavailable"
     assert history.changed is False
-    assert "timeout" in history.summary.lower()
+    assert "sourcetimeouterror" in history.summary.lower()
 
     updated_source = store.get_source("src-test-err")
-    assert updated_source.status == "error"
-    assert "timeout" in updated_source.error_message.lower()
+    assert updated_source.status == "source_unavailable"
+    assert "sourcetimeouterror" in updated_source.error_message.lower()
 
 
 # ===========================================================================
@@ -258,7 +260,7 @@ def test_api_post_sources_check_success():
         data = res.json()
         assert "check_id" in data
         assert data["source_id"] == "SRC-CMS-MEDICARE"
-        assert data["status"] in ["baseline_established", "unchanged", "change_detected"]
+        assert data["status"] in ["pending_review", "unchanged", "pending_review"]
 
 
 def test_api_get_sources_history():
@@ -286,9 +288,10 @@ def test_api_get_sources_status():
 # 4. SCHEDULER TESTS
 # ===========================================================================
 
-def test_scheduler_thread_safety_no_duplicates():
+def test_scheduler_thread_safety_no_duplicates(monkeypatch):
     """Scheduler must not start duplicate threads if already running."""
     import app.connectors.scheduler as sched
+    monkeypatch.setattr("app.connectors.change_detector.check_source_for_changes", lambda source: None)
 
     # Start once
     start_source_scheduler(interval_seconds=3600)

@@ -154,7 +154,7 @@ def test_multiple_policy_rules_no_loop_variable_leakage():
         "insurer_id": "uhc",
         "target_type": "procedure",
         "target_code": "PROC-99",
-        "proposed_effect": "prior_auth_required",
+        "proposed_effect": "requires_prior_approval",
         "effective_date": "2027-02-01",
         "supporting_quote": "PROC-99 requires PA.",
     }
@@ -291,6 +291,7 @@ def test_matcher_exact_code_no_substring():
         document_name="notice.pdf",
         policy_title="PA for PROC-1",
         insurer_id="uhc",
+        plan_ids=["*"],
         target_type="procedure",
         target_code="PROC-1",
         effective_from=date(2026, 11, 1),
@@ -313,6 +314,7 @@ def test_matcher_insurer_isolation():
         document_name="notice.pdf",
         policy_title="UHC exclusion",
         insurer_id="uhc",
+        plan_ids=["*"],
         target_type="drug",
         target_code="DRUG-A",
         effective_from=date(2026, 11, 1),
@@ -436,7 +438,8 @@ def test_multi_issue_claim_adjudication_on_exclusion_delay():
         ],
     )
 
-    rules = [rule_drug, rule_proc]
+    base_coverage = rule_drug.model_copy(update={"rule_id": "BASE-COVERAGE", "effect": RuleEffect.COVERED, "effective_from": date(2026, 1, 1)})
+    rules = [base_coverage, rule_drug, rule_proc]
     eval_before = evaluate_case(test_case, rules)
     assert eval_before.status == "Needs attention"
     verdict_drug = next(v for v in eval_before.results if v.item.code == "DRUG-A")
@@ -448,7 +451,7 @@ def test_multi_issue_claim_adjudication_on_exclusion_delay():
     delayed_rule_drug = rule_drug.model_copy()
     delayed_rule_drug.effective_from = date(2027, 1, 1)
 
-    eval_after = evaluate_case(test_case, [delayed_rule_drug, rule_proc])
+    eval_after = evaluate_case(test_case, [base_coverage, delayed_rule_drug, rule_proc])
 
     verdict_drug_after = next(v for v in eval_after.results if v.item.code == "DRUG-A")
     assert verdict_drug_after.result == "Covered"
@@ -467,12 +470,14 @@ def test_duplicate_proposal_approval_rejected():
         document_name="notice.pdf",
         policy_title="Single Approval Only",
         insurer_id="uhc",
+        plan_ids=["*"],
         target_type="drug",
         target_name="Test Drug",
         target_code="DRUG-X",
         effective_from=date(2026, 11, 1),
         proposed_effect=RuleEffect.EXCLUDED,
         is_complete=True,
+        supporting_quote="UHC excludes DRUG-X for all plans effective November 1, 2026.",
     )
     store.save_proposal(prop)
 

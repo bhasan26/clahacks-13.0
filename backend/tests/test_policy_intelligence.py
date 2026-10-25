@@ -16,7 +16,7 @@ from app.main import app
 from app.db.store import store
 from app.domain.models import ProposedPolicyChange, RuleEffect
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +29,7 @@ def setup_test_state():
 def test_extract_policy_from_text():
     """Tests POST /api/policies/extract with text document."""
     text_content = (
-        "Commercial Formulary Bulletin\n"
+        "Demo Insurance Co. Commercial Formulary Bulletin\n"
         "Beginning November 1, 2026, PLAN-GOLD will no longer cover DRUG-A. "
         "This change applies to all outpatient claims with service date on or after November 1, 2026."
     )
@@ -49,7 +49,7 @@ def test_extract_policy_from_text():
     assert len(data["diffs"]) >= 1
     diff = data["diffs"][0]
     assert diff["proposal_id"] == prop["proposal_id"]
-    assert diff["has_existing_rule"] is True
+    assert diff["has_existing_rule"] is False  # PLAN-GOLD must not version the all-plan baseline.
 
     # Verify What-If preview is attached
     assert data["impact_preview"] is not None
@@ -157,7 +157,7 @@ def test_approve_policy_workflow_and_idempotency():
     assert "C-001" in body["affected_case_ids"]
 
     # Verify rule in store was updated to v2
-    rule_v2 = store.rules.get("R-1042_v2")
+    rule_v2 = store.rules.get("R-1042-V2_v1")
     assert rule_v2 is not None
     assert rule_v2.effect == RuleEffect.EXCLUDED
     assert rule_v2.effective_from == date(2026, 11, 1)
@@ -165,8 +165,8 @@ def test_approve_policy_workflow_and_idempotency():
     # Verify proposal state
     prop_saved = store.get_proposal(proposal.proposal_id)
     assert prop_saved.review_state == "approved"
-    assert prop_saved.resulting_rule_id == "R-1042"
-    assert prop_saved.resulting_rule_version == 2
+    assert prop_saved.resulting_rule_id == "R-1042-V2"
+    assert prop_saved.resulting_rule_version == 1
 
     # Idempotent second approval call must succeed safely without duplicate versioning
     res2 = client.post(f"/api/policies/proposals/{proposal.proposal_id}/approve")

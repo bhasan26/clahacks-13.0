@@ -9,6 +9,7 @@ from datetime import date
 from app.domain.models import ProposedPolicyChange, PolicyDiff, Rule, RuleEffect
 from app.db.store import store
 from app.engine.matcher import match_proposal_to_rule
+from app.intelligence.rule_builder import find_prior
 
 
 def find_matching_existing_rule(
@@ -19,17 +20,7 @@ def find_matching_existing_rule(
     Finds the active baseline or prior version of the rule matching insurer,
     plan, item target type and code using strict matching.
     """
-    matching: List[Rule] = []
-    for r in all_rules:
-        if match_proposal_to_rule(proposal, r):
-            matching.append(r)
-
-    if not matching:
-        return None
-
-    # Pick the highest version or latest effective rule
-    sorted_rules = sorted(matching, key=lambda r: (r.version, r.effective_from), reverse=True)
-    return sorted_rules[0]
+    return find_prior(proposal, all_rules)
 
 
 def compute_policy_diff(
@@ -42,7 +33,12 @@ def compute_policy_diff(
     if all_rules is None:
         all_rules = list(store.rules.values())
 
-    prior_rule = find_matching_existing_rule(proposal, all_rules)
+    try:
+        prior_rule = find_matching_existing_rule(proposal, all_rules)
+    except ValueError as exc:
+        return PolicyDiff(proposal_id=proposal.proposal_id, has_existing_rule=False,
+                          proposed_effect=proposal.proposed_effect.value if proposal.proposed_effect else None,
+                          diff_summary=str(exc), change_category="needs_clarification")
 
     if not prior_rule:
         return PolicyDiff(
@@ -56,7 +52,7 @@ def compute_policy_diff(
             proposed_effective_from=str(proposal.effective_from) if proposal.effective_from else None,
             is_delay=False,
             is_cancellation=False,
-            diff_summary=f"New Policy Mandate: {proposal.target_name or proposal.target_code or 'Unspecified'} ({proposal.proposed_effect.value.upper() if proposal.proposed_effect else 'PENDING VERIFICATION'}) effective {proposal.effective_from or 'upon announcement'}.",
+            diff_summary=f"Proposed policy: {proposal.target_name or proposal.target_code or 'Unspecified'} ({proposal.proposed_effect.value if proposal.proposed_effect else 'unknown effect'}) effective {proposal.effective_from or 'unknown date'}. Scope and evidence require human review.",
             change_category="new_rule",
         )
 
@@ -80,13 +76,13 @@ def compute_policy_diff(
         diff_summary = (
             f"Coverage Delay Detected: {proposal.target_name or proposal.target_code} "
             f"exclusion postponed from {prev_date} to {new_date}. "
-            f"Claims before {new_date} will remain covered."
+            f"Claims must be re-evaluated against all remaining rules."
         )
         category = "delayed"
     elif is_cancellation:
         diff_summary = (
             f"Policy Cancellation: Rule {prior_rule.rule_id} cancelled. "
-            f"{proposal.target_name or proposal.target_code} coverage restored."
+            f"Re-evaluate {proposal.target_name or proposal.target_code} against all remaining rules."
         )
         category = "cancelled"
     elif prev_eff != new_eff:

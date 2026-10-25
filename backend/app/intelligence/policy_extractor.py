@@ -18,9 +18,11 @@ from app.intelligence.evidence_validator import validate_extracted_policy
 
 def get_gemini_api_key() -> Optional[str]:
     """Retrieves GEMINI_API_KEY from environment or .env files."""
+    if os.environ.get("COVERAGEGUARD_DISABLE_AI") == "true":
+        return None
     key = os.environ.get("GEMINI_API_KEY")
     if key and key.strip():
-        return key.strip()
+        return key.strip().strip('"').strip("'")
 
     env_paths = [
         os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
@@ -39,6 +41,13 @@ def get_gemini_api_key() -> Optional[str]:
             except Exception:
                 pass
     return None
+
+
+def gemini_endpoint() -> str:
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", model):
+        raise ValueError("Invalid GEMINI_MODEL identifier.")
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 SYSTEM_PROMPT = """You are CoverageGuard Policy Intelligence Engine.
@@ -83,7 +92,7 @@ def _deduplicate_proposals(proposals: List[ProposedPolicyChange]) -> List[Propos
             (p.target_code or p.target_name or "").upper(),
             p.proposed_effect.value if p.proposed_effect else "",
             str(p.effective_from) if p.effective_from else "",
-            p.source_page or 1,
+            tuple(sorted(p.plan_ids)), p.target_type, p.change_type,
         )
         if key not in seen:
             seen.add(key)
@@ -141,41 +150,43 @@ def extract_policies_with_gemini(
     )
     parts.append({"text": prompt_content})
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = gemini_endpoint()
     payload = {
         "contents": [{"parts": parts}],
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "generationConfig": {"responseMimeType": "application/json"},
     }
 
+    failure_reason = "AI service temporarily unavailable."
     try:
-        with httpx.Client(timeout=25.0) as client:
-            resp = client.post(url, json=payload)
+        with httpx.Client(timeout=float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "60"))) as client:
+            resp = client.post(url, json=payload, headers={"x-goog-api-key": api_key})
             if resp.status_code == 200:
                 raw_json = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
                 parsed = json.loads(raw_json)
-                changes = parsed.get("policy_changes", [])
-                if not changes and isinstance(parsed, list):
-                    changes = parsed
+                changes = parsed if isinstance(parsed, list) else parsed.get("policy_changes", [])
 
                 proposals = []
                 for item in changes:
                     proposal = _map_dict_to_proposal(item, doc_id, filename, pages, raw_text)
+                    proposal.extraction_method = "gemini"
+                    proposal.is_synthetic = "synthetic" in raw_text.lower()
+                    proposal.source_url = document_data.get("source_url")
                     proposals.append(proposal)
 
                 deduped = _deduplicate_proposals(proposals)
                 if deduped:
                     return deduped, True, None
             else:
-                print(f"Gemini API returned status {resp.status_code}: {resp.text}")
-    except Exception as e:
-        print(f"Gemini API error during policy extraction: {e}")
+                failure_reason = f"Gemini returned HTTP {resp.status_code}. Check the configured model and API access."
+    except Exception as exc:
+        failure_reason = f"Gemini extraction failed ({type(exc).__name__})."
 
     # Fallback to deterministic extraction if Gemini fails or times out
     fallback_proposals = _deterministic_fallback_extractor(document_data)
     for p in fallback_proposals:
         p.validation_warnings.append("AI service temporarily unavailable — extracted via deterministic fallback.")
-    return _deduplicate_proposals(fallback_proposals), False, "AI service temporarily unavailable. Deterministic fallback applied."
+    return _deduplicate_proposals(fallback_proposals), False, f"{failure_reason} Deterministic fallback applied."
 
 
 def _parse_iso_date(val: Any) -> Optional[date]:
@@ -205,18 +216,10 @@ def _map_dict_to_proposal(
     eff_date = _parse_iso_date(item.get("effective_from"))
     eff_to = _parse_iso_date(item.get("effective_to"))
 
-    eff_raw = item.get("proposed_effect")
-    effect: Optional[RuleEffect] = None
-    if eff_raw:
-        eff_str = str(eff_raw).lower()
-        if "prior" in eff_str or "approval" in eff_str or "pa" in eff_str:
-            effect = RuleEffect.REQUIRES_PRIOR_APPROVAL
-        elif "document" in eff_str:
-            effect = RuleEffect.REQUIRES_DOCUMENTS
-        elif "covered" in eff_str and "non" not in eff_str and "un" not in eff_str:
-            effect = RuleEffect.COVERED
-        elif "exclude" in eff_str or "non-cover" in eff_str or "deni" in eff_str:
-            effect = RuleEffect.EXCLUDED
+    try:
+        effect = RuleEffect(item.get("proposed_effect"))
+    except (ValueError, TypeError):
+        effect = None
 
     ch_type = item.get("change_type", "new_rule")
     if ch_type not in ["new_rule", "modification", "delayed", "cancelled"]:
@@ -262,7 +265,7 @@ def _map_dict_to_proposal(
         "plan_ids": plan_ids,
         "policy_title": item.get("policy_title") or f"Policy Notice ({filename})",
         "policy_reference": policy_reference,
-        "target_type": item.get("target_type") or "drug",
+        "target_type": item.get("target_type"),
         "target_code": target_code,
         "target_name": target_name or (target_code if target_code else "Unverified Item"),
         "previous_effect": item.get("previous_effect"),
@@ -286,301 +289,78 @@ def _map_dict_to_proposal(
     return ProposedPolicyChange(**proposal_data)
 
 
-def _deterministic_fallback_extractor(
-    document_data: Dict[str, Any],
-) -> List[ProposedPolicyChange]:
-    """
-    Transparent, reliable rule extractor used when Gemini API is unavailable or offline.
-    Extracts policy changes ONLY when evidence exists in the document text.
-    Never invents codes, effective dates, or insurers for unfamiliar documents.
-    """
-    raw_text = document_data.get("raw_text", "")
-    doc_id = document_data.get("document_id", f"DOC-{uuid.uuid4().hex[:6].upper()}")
-    filename = document_data.get("filename", "policy_letter.pdf")
-    pages = document_data.get("pages", [])
-    proposals: List[ProposedPolicyChange] = []
+def _deterministic_fallback_extractor(document_data: Dict[str, Any]) -> List[ProposedPolicyChange]:
+    """Conservative text-only assistance. Every value must occur in this document.
 
-    text_lower = raw_text.lower().strip()
-    if not text_lower:
+    No drug-name-to-billing-code mapping or implied payer/plan/date. This parser
+    intentionally produces incomplete proposals for ambiguous unfamiliar notices.
+    """
+    raw = document_data.get("raw_text", "")
+    if not raw.strip() or not re.search(r"policy|cover|exclu|prior auth|formulary|insurer|medicare", raw, re.I):
         return []
-
-    # Check if this document contains ANY health insurance policy / coverage terminology
-    insurance_keywords = [
-        "policy", "coverage", "formulary", "claim", "prior authorization",
-        "prior auth", "exclude", "exclusion", "benefit", "copay", "medical necessity",
-        "effective date", "insurer", "unitedhealthcare", "aetna", "blue cross",
-        "cigna", "medicare", "cms", "plan-gold", "drug-a", "proc-1", "humira",
-        "ozempic", "keytruda", "j9271"
+    insurer = None
+    insurer_name = None
+    identities = [
+        ("demo-insurer", "Demo Insurance Co.", r"demo insurance co\.?|demo-insurer"),
+        ("uhc", "UnitedHealthcare", r"unitedhealthcare|\buhc\b"),
+        ("aetna", "Aetna", r"\baetna\b"),
+        ("bcbs", "Blue Cross Blue Shield", r"blue cross blue shield|\bbcbs\b"),
+        ("cigna", "Cigna", r"\bcigna\b"),
+        ("cms", "CMS Medicare", r"\bcms\b|\bmedicare\b|centers for medicare & medicaid services"),
     ]
-    if not any(kw in text_lower for kw in insurance_keywords):
-        # Truly unrelated document (e.g. recipe, general letter, non-health text)
-        return []
-
-    # Pattern A: Delayed exclusion
-    if ("delay" in text_lower or "postpone" in text_lower or "extended" in text_lower) and ("drug-a" in text_lower or "plan-gold" in text_lower):
-        quote_match = re.search(
-            r"([^.\n]*?(?:delay|postpone|extended|december 1, 2026)[^.\n]*?\.)",
-            raw_text,
-            re.IGNORECASE,
-        )
-        quote = quote_match.group(1).strip() if quote_match else "Beginning December 1, 2026, PLAN-GOLD will exclude DRUG-A (delayed)."
-        eff_match = re.search(r"december\s+1,?\s+2026", text_lower)
-        eff_date = date(2026, 12, 1) if eff_match else None
-        
-        # Determine source page
-        src_page = 1
-        for p in pages:
-            if quote and quote in p.get("text", ""):
-                src_page = p.get("page", 1)
-                break
-
-        p_data = {
-            "proposal_id": f"PROP-{uuid.uuid4().hex[:6].upper()}",
-            "document_id": doc_id,
-            "document_name": filename,
-            "insurer_id": "demo-insurer",
-            "insurer_name": "Demo Insurance Co.",
-            "plan_ids": ["PLAN-GOLD"],
-            "policy_title": "Policy Circular: Delayed Coverage Exclusion for Drug A",
-            "policy_reference": "R-1042-DELAY",
-            "target_type": "drug",
-            "target_code": "DRUG-A",
-            "target_name": "Drug A",
-            "previous_effect": "excluded",
-            "proposed_effect": RuleEffect.EXCLUDED,
-            "effective_from": eff_date,
-            "change_type": "delayed",
-            "conditions": None,
-            "supporting_quote": quote,
-            "source_page": src_page,
-            "confidence": 0.96,
-            "validation_warnings": [],
-            "review_state": "pending_review",
-            "created_at": utc_now(),
-        }
-        validate_extracted_policy(p_data, pages, raw_text)
-        proposals.append(ProposedPolicyChange(**p_data))
-        return proposals
-
-    # Pattern B: Prior Authorization requirement
-    if ("prior auth" in text_lower or "authorization" in text_lower) and ("proc-1" in text_lower or "joint" in text_lower):
-        quote_match = re.search(
-            r"([^.\n]*?(?:prior auth|authorization|proc-1|joint)[^.\n]*?\.)",
-            raw_text,
-            re.IGNORECASE,
-        )
-        quote = quote_match.group(1).strip() if quote_match else ""
-        eff_match = re.search(r"december\s+15,?\s+2026", text_lower)
-        eff_date = date(2026, 12, 15) if eff_match else None
-
-        src_page = 1
-        for p in pages:
-            if quote and quote in p.get("text", ""):
-                src_page = p.get("page", 1)
-                break
-
-        p_data = {
-            "proposal_id": f"PROP-{uuid.uuid4().hex[:6].upper()}",
-            "document_id": doc_id,
-            "document_name": filename,
-            "insurer_id": "demo-insurer",
-            "insurer_name": "Demo Insurance Co.",
-            "plan_ids": ["PLAN-GOLD"],
-            "policy_title": "Clinical Policy Circular: Prior Authorization Requirement for Major Joint Procedures",
-            "policy_reference": "R-202-V2",
-            "target_type": "procedure",
-            "target_code": "PROC-1",
-            "target_name": "Major Joint Procedure",
-            "previous_effect": "covered",
-            "proposed_effect": RuleEffect.REQUIRES_PRIOR_APPROVAL,
-            "effective_from": eff_date,
-            "change_type": "modification",
-            "conditions": {"requires_prior_approval": True},
-            "supporting_quote": quote,
-            "source_page": src_page,
-            "confidence": 0.95,
-            "validation_warnings": [],
-            "review_state": "pending_review",
-            "created_at": utc_now(),
-        }
-        validate_extracted_policy(p_data, pages, raw_text)
-        proposals.append(ProposedPolicyChange(**p_data))
-        return proposals
-
-    # Pattern C: DRUG-A Exclusion
-    if "drug-a" in text_lower:
-        quote_match = re.search(
-            r"([^.\n]*?(?:no longer cover|exclude|november 1, 2026|drug-a)[^.\n]*?\.)",
-            raw_text,
-            re.IGNORECASE,
-        )
-        quote = quote_match.group(1).strip() if quote_match else ""
-        eff_match = re.search(r"november\s+1,?\s+2026", text_lower)
-        eff_date = date(2026, 11, 1) if eff_match else None
-
-        src_page = 1
-        for p in pages:
-            if quote and quote in p.get("text", ""):
-                src_page = p.get("page", 1)
-                break
-
-        p_data = {
-            "proposal_id": f"PROP-{uuid.uuid4().hex[:6].upper()}",
-            "document_id": doc_id,
-            "document_name": filename,
-            "insurer_id": "demo-insurer",
-            "insurer_name": "Demo Insurance Co.",
-            "plan_ids": ["PLAN-GOLD"] if "plan-gold" in text_lower else [],
-            "policy_title": "Commercial Formulary Bulletin: Drug A Non-Coverage Exclusion",
-            "policy_reference": "R-1042-V2",
-            "target_type": "drug",
-            "target_code": "DRUG-A",
-            "target_name": "Drug A",
-            "previous_effect": "covered",
-            "proposed_effect": RuleEffect.EXCLUDED if ("no longer cover" in text_lower or "exclude" in text_lower) else None,
-            "effective_from": eff_date,
-            "change_type": "new_rule",
-            "conditions": None,
-            "supporting_quote": quote,
-            "source_page": src_page,
-            "confidence": 0.98,
-            "validation_warnings": [],
-            "review_state": "pending_review",
-            "created_at": utc_now(),
-        }
-        validate_extracted_policy(p_data, pages, raw_text)
-        proposals.append(ProposedPolicyChange(**p_data))
-        return proposals
-
-    # Pattern D: Humira / UHC Policy notice
-    if "humira" in text_lower or "adalimumab" in text_lower:
-        quote_match = re.search(
-            r"([^.\n]*?(?:humira|adalimumab|biosimilar|step-therapy)[^.\n]*?\.)",
-            raw_text,
-            re.IGNORECASE,
-        )
-        quote = quote_match.group(1).strip() if quote_match else "Mandates step-therapy trial of preferred biosimilars before originator Humira approval."
-        eff_match = re.search(r"november\s+15,?\s+2026", text_lower)
-        eff_date = date(2026, 11, 15) if eff_match else None
-
-        src_page = 1
-        for p in pages:
-            if quote and quote in p.get("text", ""):
-                src_page = p.get("page", 1)
-                break
-
-        p_data = {
-            "proposal_id": f"PROP-{uuid.uuid4().hex[:6].upper()}",
-            "document_id": doc_id,
-            "document_name": filename,
-            "insurer_id": "uhc",
-            "insurer_name": "UnitedHealthcare",
-            "plan_ids": [],
-            "policy_title": "Medical Policy Bulletin: Adalimumab Step Therapy & Prior Authorization",
-            "policy_reference": "UHC-POL-405",
-            "target_type": "drug",
-            "target_code": "HUMIRA",
-            "target_name": "Humira (Adalimumab)",
-            "previous_effect": "covered",
-            "proposed_effect": RuleEffect.REQUIRES_PRIOR_APPROVAL,
-            "effective_from": eff_date,
-            "change_type": "modification",
-            "conditions": {"requires_prior_approval": True, "required_trial": "Hadlima or Hyrimoz"},
-            "supporting_quote": quote,
-            "source_page": src_page,
-            "confidence": 0.97,
-            "validation_warnings": [],
-            "review_state": "pending_review",
-            "created_at": utc_now(),
-        }
-        validate_extracted_policy(p_data, pages, raw_text)
-        proposals.append(ProposedPolicyChange(**p_data))
-        return proposals
-
-    # Pattern E: Named drug/procedure without billing code (e.g. Ozempic, Keytruda) or generic policy notice
-    # Extract entities strictly from text
-    target_name = None
-    if "ozempic" in text_lower:
-        target_name = "Ozempic"
-    elif "keytruda" in text_lower or "pembrolizumab" in text_lower:
-        target_name = "Keytruda"
-    elif "semaglutide" in text_lower:
-        target_name = "Semaglutide"
-
-    # Detect insurer if named
-    detected_insurer = None
-    detected_insurer_name = None
-    if "unitedhealthcare" in text_lower or "uhc" in text_lower:
-        detected_insurer = "uhc"
-        detected_insurer_name = "UnitedHealthcare"
-    elif "aetna" in text_lower:
-        detected_insurer = "aetna"
-        detected_insurer_name = "Aetna Health"
-    elif "blue cross" in text_lower or "bcbs" in text_lower:
-        detected_insurer = "bcbs"
-        detected_insurer_name = "Blue Cross Blue Shield"
-    elif "medicare" in text_lower or "cms" in text_lower:
-        detected_insurer = "cms"
-        detected_insurer_name = "CMS Medicare"
-
-    # Detect date if present
-    date_match = re.search(r"(\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b)", text_lower)
-    parsed_date = _parse_iso_date(date_match.group(1)) if date_match else None
-
-    # Detect billing code if present
-    code_match = re.search(r"\b([A-Z]\d{4}|\d{5}|[A-Z]{3,5}-\d+)\b", raw_text)
-    found_code = code_match.group(1) if code_match else None
-
-    # Detect effect
-    detected_effect = None
-    if "exclude" in text_lower or "no longer cover" in text_lower:
-        detected_effect = RuleEffect.EXCLUDED
-    elif "prior auth" in text_lower or "approval" in text_lower:
-        detected_effect = RuleEffect.REQUIRES_PRIOR_APPROVAL
-    elif "covered" in text_lower:
-        detected_effect = RuleEffect.COVERED
-
-    # Find quotation
-    quote = ""
-    for sentence in re.split(r"[.\n]", raw_text):
-        sentence = sentence.strip()
-        if len(sentence) > 20 and any(w in sentence.lower() for w in ["cover", "policy", "require", "effective", "exclude"]):
-            quote = sentence + "."
-            break
-    if not quote:
-        quote = raw_text[:120].strip()
-
-    # Find source page
-    src_page = 1
-    for p in pages:
-        if quote and quote[:30] in p.get("text", ""):
-            src_page = p.get("page", 1)
-            break
-
-    p_data = {
-        "proposal_id": f"PROP-{uuid.uuid4().hex[:6].upper()}",
-        "document_id": doc_id,
-        "document_name": filename,
-        "insurer_id": detected_insurer,
-        "insurer_name": detected_insurer_name,
-        "plan_ids": [],
-        "policy_title": f"Policy Notice regarding {target_name or 'Unspecified Item'}",
-        "policy_reference": None,
-        "target_type": "drug" if target_name in ["Ozempic", "Keytruda", "Semaglutide"] else "service",
-        "target_code": found_code,
-        "target_name": target_name,
-        "previous_effect": None,
-        "proposed_effect": detected_effect,
-        "effective_from": parsed_date,
-        "change_type": "new_rule",
-        "conditions": None,
-        "supporting_quote": quote,
-        "source_page": src_page,
-        "confidence": 0.80 if target_name else 0.50,
-        "validation_warnings": [],
-        "review_state": "pending_review",
-        "created_at": utc_now(),
-    }
-    validate_extracted_policy(p_data, pages, raw_text)
-    proposals.append(ProposedPolicyChange(**p_data))
-    return proposals
+    found = [(i, n) for i, n, pattern in identities if re.search(pattern, raw, re.I)]
+    if len(found) == 1:
+        insurer, insurer_name = found[0]
+    plans = list(dict.fromkeys(re.findall(r"\bPLAN-[A-Z0-9-]+\b", raw, re.I)))
+    if not plans and re.search(r"\ball (?:insurance |benefit )?plans\b", raw, re.I):
+        plans = ["*"]
+    code_pattern = r"\b(?:[A-Z]\d{4}|\d{5}|(?:DRUG|PROC|SVC)-[A-Z0-9]+|BIO-TARGET)\b"
+    codes = list(dict.fromkeys(re.findall(code_pattern, raw)))
+    names = [name for name in ("Ozempic", "Keytruda", "Semaglutide", "Humira", "Adalimumab") if re.search(r"\b"+name+r"\b", raw, re.I)]
+    # Code-free notices still need an explicit reviewer code mapping.
+    targets = codes or [None]
+    dates = r"(?:\d{4}-\d{2}-\d{2}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4})"
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+|\n", raw) if x.strip()]
+    proposals = []
+    for code in targets:
+        related = [line for line in sentences if (not code or re.search(r"(?<![A-Z0-9-])"+re.escape(code)+r"(?![A-Z0-9-])", line, re.I))]
+        actions = [line for line in related if re.search(r"cover|exclu|prior auth|require|postpon|delay|cancel", line, re.I)]
+        # Prefer an operative dated sentence over a subject/title mentioning exclusion.
+        quote = max(actions, key=lambda line: (bool(re.search(dates, line, re.I)),
+                    bool(re.search(r"postponed|delayed until|cancelled|will no longer|is excluded|requires", line, re.I)))) if actions else (related[0] if related else raw.strip())
+        context = quote.lower()
+        effect = None
+        if re.search(r"exclu|no longer cover|not cover|non.cover", context):
+            effect = "excluded"
+        elif re.search(r"prior auth|prior approval", context):
+            effect = "requires_prior_approval"
+        elif re.search(r"require.*document", context):
+            effect = "requires_documents"
+        elif re.search(r"\bcover(?:ed|age)?\b", context):
+            effect = "covered" if re.search(r"\b(?:is|are|remain|will be) covered\b", context) else None
+        change = "cancelled" if re.search(r"cancel|withdraw|rescind", context) else "delayed" if re.search(r"postpon|delay", context) else "new_rule"
+        explicit_dates = re.findall(dates, quote, re.I)
+        if explicit_dates:
+            effective = explicit_dates[-1] if change == "delayed" else explicit_dates[0]
+        else:
+            labelled = re.search(r"(?:New Delayed Effective Date|Effective Date|Effective from|Effective)\s*[: ]\s*("+dates+r")", raw, re.I)
+            effective = labelled.group(1) if labelled else None
+        target_type = None
+        if code and (code.startswith("DRUG-") or code.startswith("J") or code == "BIO-TARGET") or names:
+            target_type = "drug"
+        elif code and (code.startswith("PROC-") or code.isdigit()):
+            target_type = "procedure"
+        elif code and code.startswith("SVC-"):
+            target_type = "service"
+        title = next((line.strip().lstrip("# ") for line in raw.splitlines() if line.strip() and not line.startswith("--- [Page")), None)
+        item = dict(insurer_id=insurer, insurer_name=insurer_name, plan_ids=plans,
+                    target_type=target_type, target_code=code, target_name=names[0] if names else code,
+                    proposed_effect=effect, effective_from=effective, supporting_quote=quote,
+                    change_type=change, policy_title=title)
+        p = _map_dict_to_proposal(item, document_data.get("document_id", "DOC-TEXT"), document_data.get("filename", "notice.txt"), document_data.get("pages", []), raw)
+        p.extraction_method = "deterministic"
+        p.is_synthetic = "synthetic" in raw.lower()
+        p.source_url = document_data.get("source_url")
+        p.validation_warnings.append("Conservative text parser; reviewer must verify every field against the original document.")
+        proposals.append(p)
+    return _deduplicate_proposals(proposals)
