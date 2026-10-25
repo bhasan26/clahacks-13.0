@@ -307,19 +307,21 @@ export type ReviewStateType = 'pending_review' | 'approved' | 'rejected' | 'need
 export type PolicyChangeType = 'new_rule' | 'modification' | 'delayed' | 'cancelled';
 
 export interface ProposedPolicyChange {
+  evidence_verified?: boolean;
+  evidence_confirmed_by_reviewer?: boolean;
   proposal_id: string;
   document_id: string;
   document_name: string;
-  insurer_id: string;
-  insurer_name: string;
+  insurer_id: string | null;
+  insurer_name: string | null;
   plan_ids: string[];
   policy_title: string;
   policy_reference?: string | null;
-  target_type: 'drug' | 'procedure' | 'service';
-  target_code: string;
+  target_type: 'drug' | 'procedure' | 'service' | null;
+  target_code: string | null;
   target_name?: string | null;
   previous_effect?: string | null;
-  proposed_effect: 'covered' | 'excluded' | 'requires_prior_approval' | 'requires_documents';
+  proposed_effect: 'covered' | 'excluded' | 'requires_prior_approval' | 'requires_documents' | null;
   effective_from?: string | null;
   effective_to?: string | null;
   change_type: PolicyChangeType;
@@ -395,6 +397,9 @@ export interface ExtractedDocumentResult {
   diffs: PolicyDiff[];
   impact_preview?: ImpactPreviewResult | null;
   extracted_at: string;
+  extraction_method?: string;
+  extraction_error?: string | null;
+  warnings?: string[];
 }
 
 export interface OfficialPolicySource {
@@ -406,7 +411,7 @@ export interface OfficialPolicySource {
   last_checked_at?: string | null;
   last_changed_at?: string | null;
   content_hash?: string | null;
-  status: 'active' | 'connected' | 'checking' | 'unchanged' | 'change_detected' | 'error';
+  status: 'active' | 'connected' | 'checking' | 'unchanged' | 'change_detected' | 'error' | 'fetched' | 'processing' | 'pending_review' | 'extraction_failed' | 'source_unavailable' | 'disabled';
   latest_document_title?: string | null;
   pending_proposal_ids: string[];
   error_message?: string | null;

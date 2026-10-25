@@ -11,6 +11,9 @@ Matches the specification:
 """
 
 import json
+import secrets
+from contextlib import asynccontextmanager
+from starlette.responses import JSONResponse
 import os
 import uuid
 from pathlib import Path
@@ -27,11 +30,12 @@ if env_file.exists():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 from app.db.store import store
 from app.domain.models import (
     Alert,
+    AlertStatus,
     AlertTask,
     Case,
     CaseItem,
@@ -65,19 +69,63 @@ from app.intelligence import (
     preview_claim_impact,
 )
 
+@asynccontextmanager
+async def lifespan(app):
+    from app.connectors.scheduler import acquire_worker_lock, release_worker_lock, start_source_scheduler, stop_source_scheduler
+    acquire_worker_lock()
+    try:
+        store.load_checkpoint()
+        if os.environ.get("COVERAGEGUARD_SCHEDULER_ENABLED", "false").lower() == "true":
+            start_source_scheduler(int(os.environ.get("COVERAGEGUARD_CHECK_INTERVAL", "3600")))
+        yield
+    finally:
+        stop_source_scheduler()
+        store.save_checkpoint()
+        release_worker_lock()
+
+
 app = FastAPI(
     title="CoverageGuard API",
     description="Hospital insurance-claims agent for coverage verification.",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=os.environ.get("COVERAGEGUARD_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def local_synthetic_boundary(request: Request, call_next):
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        expected = os.environ.get("COVERAGEGUARD_REVIEW_TOKEN")
+        supplied = request.headers.get("x-reviewer-token", "")
+        peer = request.client.host if request.client else ""
+        origin = request.headers.get("origin")
+        allowed_origins = os.environ.get("COVERAGEGUARD_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+        if origin and origin not in allowed_origins:
+            return JSONResponse({"detail": "Origin is not allowed."}, status_code=403)
+        if (expected and not secrets.compare_digest(expected, supplied)) or (not expected and peer not in {"127.0.0.1", "::1", "testclient"}):
+            return JSONResponse({"detail": "Reviewer authorization required."}, status_code=403)
+        if request.url.path in {"/api/policies/extract", "/api/intake/analyze", "/api/cases/upload"} and request.headers.get("x-synthetic-data") != "true":
+            return JSONResponse({"detail": "Synthetic data only. Confirm with X-Synthetic-Data: true."}, status_code=400)
+        # Bound actual bytes, including chunked/base64 and multipart requests.
+        limit = 14 * 1024 * 1024
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > limit:
+                return JSONResponse({"detail": "Request exceeds upload limit."}, status_code=413)
+        request._body = bytes(body)
+    response = await call_next(request)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and response.status_code < 400:
+        store.save_checkpoint()
+    return response
 
 
 # ---------------------------------------------------------
@@ -224,8 +272,20 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
     3. Runs the deterministic coverage engine against active payer rules.
     4. Attaches official policy bulletin citations and officer action instructions.
     """
+    from app.intake.analyzer import extract_base64_and_mime
+    for encoded in (payload.card_image_b64, payload.clinical_doc_b64):
+        if encoded:
+            try:
+                clean, mime = extract_base64_and_mime(encoded)
+                import base64
+                process_uploaded_document(base64.b64decode(clean), "intake", mime)
+            except (ValueError, DocumentProcessingError):
+                raise HTTPException(status_code=400, detail="Invalid, unsupported, or oversized intake file.")
     if payload.sample_id:
-        preset = get_fallback_sample(payload.sample_id)
+        try:
+            preset = get_fallback_sample(payload.sample_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         card_data = preset["card"]
         clinical_data = preset["clinical"]
     else:
@@ -273,41 +333,15 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
                     )
                 )
             )
-        # 4. Infer from clinical text or prescribed drug/procedure
+        # Payer and plan must be supplied by source text/card or the reviewer.
         else:
-            txt = ((payload.clinical_text or "") + " " + (clinical_data.get("patient_name") or "")).lower()
-            item_str = " ".join([i.get("name", "") + " " + i.get("code", "") for i in clinical_data.get("items", [])]).lower()
-            combined = txt + " " + item_str
-            if "aetna" in combined or "keytruda" in combined or "pembrolizumab" in combined:
-                ins_id, ins_name = "aetna", "Aetna Health"
-            elif "bcbs" in combined or "blue" in combined or "ozempic" in combined or "semaglutide" in combined:
-                ins_id, ins_name = "bcbs", "Blue Cross Blue Shield"
-            else:
-                ins_id, ins_name = "uhc", "UnitedHealthcare"
-
-        # Apply resolved payer details to card_data
+            ins_id, ins_name = "", None
         card_data["insurer_id"] = ins_id
         card_data["insurer_name"] = ins_name
-        card_data["plan_id"] = card_data.get("plan_id") or (
-            "UHC-CHOICE-PLUS" if ins_id == "uhc" else (
-                "AETNA-POS-II" if ins_id == "aetna" else (
-                    "BCBS-FEP-PPO" if ins_id == "bcbs" else "PLAN-GOLD"
-                )
-            )
-        )
-        card_data["plan_name"] = card_data.get("plan_name") or clinical_data.get("plan_name") or (
-            "UHC Choice Plus PPO" if ins_id == "uhc" else (
-                "Open Choice POS II (Commercial)" if ins_id == "aetna" else (
-                    "Federal Employee Program (FEP PPO)" if ins_id == "bcbs" else "Commercial Comprehensive PPO"
-                )
-            )
-        )
-        card_data["member_ref"] = card_data.get("member_ref") or clinical_data.get("member_ref") or f"{ins_id.upper()}-9928109"
-        card_data["group_number"] = card_data.get("group_number") or clinical_data.get("group_number") or "GRP-710294"
-        card_data["copay"] = card_data.get("copay") or "$30 Specialist"
+        card_data["plan_id"] = payload.selected_plan_id or card_data.get("plan_id") or clinical_data.get("plan_id") or ""
 
     # Build provisional case for instant rule evaluation
-    sdate = date(2026, 11, 10)
+    sdate = None
     if clinical_data.get("service_date"):
         try:
             sdate = datetime.strptime(clinical_data["service_date"], "%Y-%m-%d").date()
@@ -318,29 +352,30 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
     case_items = [
         CaseItem(
             type=item.get("type", "drug"),
-            code=item.get("code", "DRUG-A"),
+            code=item.get("code") or "",
             name=item.get("name", "Prescribed Item"),
             quantity=item.get("quantity", 1),
         )
         for item in raw_items
     ]
-    if not case_items:
-        case_items = [CaseItem(type="drug", code="DRUG-A", name="Standard Care Item", quantity=1)]
 
-    dx_code = clinical_data.get("diagnosis_code") or "DX-100"
+
+    dx_code = clinical_data.get("diagnosis_code")
     dx_desc = clinical_data.get("diagnosis_desc") or "Clinical Order Intake"
 
+    if not sdate:
+        clinical_data.setdefault("validation_warnings", []).append("Missing service date; coverage cannot be assessed.")
     provisional_case = Case(
         case_id="PROVISIONAL",
-        insurer_id=card_data.get("insurer_id") or "demo-insurer",
-        insurer_name=card_data.get("insurer_name") or "Demo Insurance Co.",
-        plan_id=card_data.get("plan_id") or "PLAN-GOLD",
+        insurer_id=card_data.get("insurer_id") or "",
+        insurer_name=card_data.get("insurer_name"),
+        plan_id=card_data.get("plan_id") or "",
         member_ref=card_data.get("member_ref") or f"M-{uuid.uuid4().hex[:6]}",
         group_number=card_data.get("group_number"),
         specialty=clinical_data.get("specialty") or "Cardiology",
         service_date=sdate,
         visit_type="outpatient",
-        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)],
+        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)] if dx_code else [],
         items=case_items,
         documents=clinical_data.get("documents", []),
         prior_approval_ref=clinical_data.get("prior_approval_ref"),
@@ -373,9 +408,9 @@ class UploadCasePayload(BaseModel):
     specialty: str = "Cardiology"
     patient_text: Optional[str] = ""
     prescription_text: Optional[str] = None
-    insurer_id: Optional[str] = "demo-insurer"
-    insurer_name: Optional[str] = "Demo Insurance Co."
-    plan_id: Optional[str] = "PLAN-GOLD"
+    insurer_id: Optional[str] = None
+    insurer_name: Optional[str] = None
+    plan_id: Optional[str] = None
     member_ref: Optional[str] = None
     group_number: Optional[str] = None
     item_name: Optional[str] = None
@@ -391,28 +426,19 @@ class UploadCasePayload(BaseModel):
 @app.post("/api/cases/upload")
 def upload_patient_file(payload: UploadCasePayload):
     """Upload patient file and prescription; extracts items and deterministically checks coverage."""
-    new_id = f"C-{len(store.cases) + 1:03d}"
+    new_id = f"C-{uuid.uuid4().hex[:12].upper()}"
 
-    # Use specified item or extract from text
-    itype = payload.item_type or "drug"
-    icode = payload.item_code or ("DRUG-A" if "drug a" in (payload.patient_text or "").lower() else "STD-CARE")
-    iname = payload.item_name or ("Drug A" if icode == "DRUG-A" else "Standard Care Protocol")
-
-    sdate = date(2026, 11, 15)
-    if payload.service_date:
-        try:
-            sdate = datetime.strptime(payload.service_date, "%Y-%m-%d").date()
-        except Exception:
-            pass
-
-    member_id = payload.member_ref.strip() if payload.member_ref and payload.member_ref.strip() else f"M-{uuid.uuid4().hex[:6]}"
-    ins_id = payload.insurer_id or "demo-insurer"
-    ins_name = payload.insurer_name or "Demo Insurance Co."
-    p_id = payload.plan_id or "PLAN-GOLD"
-
-    dx_code = payload.diagnosis_code or "DX-100"
-    dx_desc = payload.diagnosis_desc or f"{payload.specialty} Intake"
-    docs = payload.documents or []
+    required = ("insurer_id", "plan_id", "member_ref", "item_code", "service_date", "item_type")
+    missing = [field for field in required if not getattr(payload, field)]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Verified values required: {', '.join(missing)}")
+    try:
+        sdate = date.fromisoformat(payload.service_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid service date.")
+    itype, icode, iname = payload.item_type, payload.item_code, payload.item_name
+    member_id, ins_id, ins_name, p_id = payload.member_ref, payload.insurer_id, payload.insurer_name, payload.plan_id
+    dx_code, dx_desc, docs = payload.diagnosis_code, payload.diagnosis_desc, payload.documents or []
 
     new_case = Case(
         case_id=new_id,
@@ -424,7 +450,7 @@ def upload_patient_file(payload: UploadCasePayload):
         specialty=payload.specialty,
         service_date=sdate,
         visit_type="outpatient",
-        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)],
+        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)] if dx_code else [],
         items=[CaseItem(type=itype, code=icode, name=iname, quantity=1)],
         documents=docs,
         prior_approval_ref=payload.prior_approval_ref,
@@ -501,9 +527,14 @@ def insurer_rule_changes(since: Optional[str] = None):
 @app.delete("/api/cases")
 @app.post("/api/cases/clear")
 def clear_cases():
-    """Deletes all demo entries and clears caseload."""
-    store.clear_demo_entries()
-    return {"success": True, "message": "All demo entries deleted. Caseload is now empty."}
+    """Clear claims while preserving policy evidence, versions and audit history."""
+    store.clear_all_cases()
+    for alert in store.alerts.values():
+        if alert.status == "open":
+            alert.status = AlertStatus.CLOSED
+            alert.closed_reason = "Synthetic caseload cleared."
+    store.record_audit("CASES_CLEARED", {"cases_count": 0}, actor="claims-officer")
+    return {"success": True, "message": "Caseload cleared; policy history retained."}
 
 
 @app.post("/api/simulator/reset")
@@ -511,7 +542,13 @@ def clear_cases():
 def reset_demo(seed_demo: bool = Query(True, description="Seed mock demo cases")):
     """Resets data. If seed_demo=True, loads 40 test cases for QA test runners."""
     store.reset_state(seed_demo=seed_demo)
+    store.demo_mode = seed_demo
     return {"success": True, "message": f"Demo state reset (seed_demo={seed_demo})."}
+
+
+@app.get("/api/audit")
+def get_audit_history():
+    return store.audit_log
 
 
 # ---------------------------------------------------------
@@ -553,7 +590,7 @@ async def extract_policy_document(request: Request):
         pasted_text = form.get("text")
 
         if uploaded_file and hasattr(uploaded_file, "read"):
-            file_bytes = await uploaded_file.read()
+            file_bytes = await uploaded_file.read(10 * 1024 * 1024 + 1)
             filename = uploaded_file.filename or "uploaded_policy.pdf"
             mime_type = uploaded_file.content_type
         elif pasted_text:
@@ -576,7 +613,10 @@ async def extract_policy_document(request: Request):
             mime_type = "text/plain"
         elif body.get("file_b64"):
             import base64
-            file_bytes = base64.b64decode(body["file_b64"])
+            try:
+                file_bytes = base64.b64decode(body["file_b64"], validate=True)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Invalid base64 file data.")
             filename = body.get("filename", "uploaded_doc.pdf")
             mime_type = body.get("mime_type")
         else:
@@ -587,7 +627,7 @@ async def extract_policy_document(request: Request):
     except DocumentProcessingError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process document: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process document.")
 
     # Extract policy changes via Gemini
     proposals, used_ai, ai_err = extract_policies_with_gemini(doc_data)
@@ -609,6 +649,8 @@ async def extract_policy_document(request: Request):
         diffs=diffs,
         impact_preview=impact_preview,
         extracted_at=utc_now(),
+        extraction_method="gemini" if used_ai else "deterministic",
+        extraction_error=ai_err, warnings=doc_data.get("warnings", []),
     )
 
     store.save_extracted_document(result)
@@ -676,9 +718,9 @@ def approve_proposal_endpoint(
             "affected_case_ids": affected_cases,
         }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Approval failed: {e}")
+        raise HTTPException(status_code=422 if store.get_proposal(proposal_id) else 404, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Approval failed; no provider details are exposed.")
 
 
 @app.post("/api/policies/proposals/{proposal_id}/reject")
@@ -804,6 +846,8 @@ def check_source_endpoint(payload: Optional[CheckSourceRequest] = None):
     else:
         raise HTTPException(status_code=400, detail="No official sources configured.")
 
+    if payload and payload.override_content is not None and os.environ.get("COVERAGEGUARD_ALLOW_SOURCE_FIXTURES") != "true":
+        raise HTTPException(status_code=403, detail="Source fixture overrides are disabled outside explicit test mode.")
     override_bytes = payload.override_content.encode("utf-8") if (payload and payload.override_content) else None
     override_file = payload.override_filename if payload else None
 
@@ -828,10 +872,11 @@ def get_sources_status_endpoint():
     history = store.get_source_history()
     return {
         "total_sources": len(sources),
-        "connected_sources": len([s for s in sources if s.status == "connected"]),
+        "connected_sources": len([s for s in sources if s.status in {"connected", "pending_review", "unchanged"}]),
         "sources": sources,
         "latest_check": history[0] if history else None,
-        "is_real_external_connection": any(s.is_real_external_source for s in sources),
+        "is_real_external_connection": any(s.processed_at and s.is_real_external_source and not s.last_check_simulated for s in sources),
+        "scheduler_enabled": os.environ.get("COVERAGEGUARD_SCHEDULER_ENABLED", "false") == "true",
     }
 
 

@@ -1,0 +1,21 @@
+{
+  "cms": {
+    "http_status": 200,
+    "source_url": "https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?ncdid=372",
+    "title": "Next Generation Sequencing (NGS)",
+    "download_bytes": 143844,
+    "policy_text_characters": 5265,
+    "meaningful_hash": "06c977e1346aa1e414c704fdbef600960873e40bf0af7813b88ae214503f8357",
+    "second_fetch_same_policy": true,
+    "first_pipeline_status": "pending_review",
+    "repeat_pipeline_status": "unchanged",
+    "proposals_staged": 1,
+    "repeat_proposals": 0,
+    "approved_rules_applied": 0,
+    "extraction_error": null
+  },
+  "gemini": {
+    "status": "not_tested",
+    "reason": "GEMINI_API_KEY unavailable"
+  }
+}

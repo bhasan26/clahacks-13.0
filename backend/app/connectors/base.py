@@ -38,19 +38,5 @@ class PolicySourceConnector(ABC):
 
     @staticmethod
     def compute_fingerprint(content: bytes) -> str:
-        """
-        Computes SHA-256 content fingerprint for change detection.
-        For HTML/web documents, normalizes away dynamic security nonces and scripts
-        so only substantive policy text changes trigger alerts.
-        """
-        import re
-        try:
-            text = content.decode("utf-8", errors="ignore")
-            if "<html" in text.lower() or "<!doctype" in text.lower() or "<body" in text.lower():
-                clean_text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", text, flags=re.DOTALL | re.IGNORECASE)
-                clean_text = re.sub(r"<[^>]+>", " ", clean_text)
-                clean_text = " ".join(clean_text.split())
-                return hashlib.sha256(clean_text.encode("utf-8")).hexdigest()
-        except Exception:
-            pass
+        """Raw downloaded-byte hash. Meaningful policy normalization is separate."""
         return hashlib.sha256(content).hexdigest()

@@ -50,7 +50,7 @@ class Rule(BaseModel):
     rule_id: str
     version: int
     insurer_id: str
-    plan_ids: List[str] = Field(default_factory=lambda: ["*"])
+    plan_ids: List[str] = Field(default_factory=list)
     category: RuleCategory
     target: Target
     effect: RuleEffect
@@ -65,6 +65,9 @@ class Rule(BaseModel):
     bulletin_summary: Optional[str] = None
     action_guidance: Optional[List[str]] = None
     received_at: datetime = Field(default_factory=utc_now)
+    change_type: str = "new_rule"
+    replaces_version: Optional[int] = None
+    is_synthetic: bool = False
 
 
 class Diagnosis(BaseModel):
@@ -86,13 +89,13 @@ CaseStatusType = Literal["Approved", "Needs attention", "Missing or wrong info"]
 
 class Case(BaseModel):
     case_id: str
-    insurer_id: str = "demo-insurer"
-    insurer_name: Optional[str] = "Demo Insurance Co."
-    plan_id: str = "PLAN-GOLD"
+    insurer_id: str = ""
+    insurer_name: Optional[str] = None
+    plan_id: str = ""
     member_ref: str
     group_number: Optional[str] = None
     specialty: str = "Cardiology"  # Cardiology, Oncology, Orthopedics, Neurology, Gastroenterology
-    service_date: date
+    service_date: Optional[date] = None
     visit_type: str = "outpatient"
     diagnoses: List[Diagnosis] = Field(default_factory=list)
     items: List[CaseItem] = Field(default_factory=list)
@@ -252,6 +255,11 @@ class ProposedPolicyChange(BaseModel):
     proposal_id: str
     document_id: str
     document_name: str
+    source_url: Optional[str] = None
+    evidence_verified: bool = False
+    evidence_confirmed_by_reviewer: bool = False
+    extraction_method: Optional[str] = None
+    is_synthetic: bool = False
     insurer_id: Optional[str] = None
     insurer_name: Optional[str] = None
     plan_ids: List[str] = Field(default_factory=list)
@@ -332,6 +340,10 @@ class ExtractedDocumentResult(BaseModel):
     diffs: List[PolicyDiff]
     impact_preview: Optional[ImpactPreviewResult] = None
     extracted_at: datetime = Field(default_factory=utc_now)
+    extraction_method: Optional[str] = None
+    extraction_error: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+    source_url: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +358,11 @@ class OfficialPolicySource(BaseModel):
     last_checked_at: Optional[datetime] = None
     last_changed_at: Optional[datetime] = None
     content_hash: Optional[str] = None
-    status: Literal["active", "connected", "checking", "unchanged", "change_detected", "error"] = "active"
+    downloaded_content_hash: Optional[str] = None
+    fetched_at: Optional[datetime] = None
+    processed_at: Optional[datetime] = None
+    last_check_simulated: bool = False
+    status: Literal["active", "connected", "checking", "unchanged", "change_detected", "error", "fetched", "processing", "pending_review", "extraction_failed", "source_unavailable", "disabled"] = "active"
     latest_document_title: Optional[str] = None
     pending_proposal_ids: List[str] = Field(default_factory=list)
     error_message: Optional[str] = None
@@ -366,5 +382,6 @@ class SourceCheckHistory(BaseModel):
     proposals_created: List[str] = Field(default_factory=list)
     affected_claims_count: int = 0
     error_message: Optional[str] = None
+    is_simulated: bool = False
 
 

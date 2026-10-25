@@ -17,3 +17,6 @@ dist/
 
 # OS
 .DS_Store
+backend/data/
+frontend/tsconfig.tsbuildinfo
+playwright-report/

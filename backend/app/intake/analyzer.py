@@ -13,39 +13,29 @@ import httpx
 
 
 def get_gemini_api_key() -> Optional[str]:
-    # Check environment variable first
-    key = os.environ.get("GEMINI_API_KEY")
-    if key and key.strip():
-        return key.strip()
-
-    # Try reading from backend/.env
-    env_paths = [
-        os.path.join(os.path.dirname(__file__), "..", "..", ".env"),
-        os.path.join(os.getcwd(), "backend", ".env"),
-        os.path.join(os.getcwd(), ".env"),
-    ]
-    for p in env_paths:
-        if os.path.exists(p):
-            try:
-                content = open(p).read()
-                for line in content.splitlines():
-                    if line.startswith("GEMINI_API_KEY="):
-                        k = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if k:
-                            return k
-            except Exception:
-                pass
-    return None
+    from app.intelligence.policy_extractor import get_gemini_api_key as shared_key
+    return shared_key()
 
 
 def extract_base64_and_mime(data_uri_or_b64: str) -> tuple[str, str]:
     """Parse data URI or raw base64 and return (clean_b64, mime_type)."""
+    if len(data_uri_or_b64) > 14 * 1024 * 1024:
+        raise ValueError("Uploaded file exceeds size limit.")
     if data_uri_or_b64.startswith("data:"):
         match = re.match(r"data:([^;]+);base64,(.*)", data_uri_or_b64)
         if match:
-            return match.group(2), match.group(1)
+            clean, mime = match.group(2), match.group(1)
+            decoded = base64.b64decode(clean, validate=True)
+            if len(decoded) > 10 * 1024 * 1024:
+                raise ValueError("Uploaded file exceeds 10 MB limit.")
+            if mime not in {"application/pdf", "image/png", "image/jpeg", "image/webp", "text/plain"}:
+                raise ValueError("Unsupported intake file type.")
+            return clean, mime
     # Default to image/jpeg if raw base64
-    return data_uri_or_b64, "image/jpeg"
+    decoded = base64.b64decode(data_uri_or_b64, validate=True)
+    if len(decoded) > 10 * 1024 * 1024:
+        raise ValueError("Uploaded file exceeds 10 MB limit.")
+    return data_uri_or_b64, "application/pdf" if decoded.startswith(b"%PDF-") else "image/jpeg"
 
 
 def get_fallback_sample(sample_id: str) -> Dict[str, Any]:
@@ -112,7 +102,7 @@ def get_fallback_sample(sample_id: str) -> Dict[str, Any]:
                 "confidence": 0.96,
             },
         }
-    else:  # default to aetna_keytruda
+    elif sample_id == "aetna_keytruda":
         return {
             "card": {
                 "insurer_name": "Aetna Health",
@@ -145,6 +135,8 @@ def get_fallback_sample(sample_id: str) -> Dict[str, Any]:
         }
 
 
+    raise ValueError("Unknown synthetic sample preset.")
+
 def call_gemini_extraction(
     parts: List[Dict[str, Any]],
     system_instruction: str,
@@ -154,7 +146,8 @@ def call_gemini_extraction(
     if not api_key:
         return None
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={api_key}"
+    from app.intelligence.policy_extractor import gemini_endpoint
+    url = gemini_endpoint()
     payload = {
         "contents": [{"parts": parts}],
         "systemInstruction": {"parts": [{"text": system_instruction}]},
@@ -162,13 +155,13 @@ def call_gemini_extraction(
     }
 
     try:
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(url, json=payload)
+        with httpx.Client(timeout=float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "60"))) as client:
+            resp = client.post(url, json=payload, headers={"x-goog-api-key": api_key})
             if resp.status_code == 200:
                 text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
                 return json.loads(text)
-    except Exception as e:
-        print(f"Gemini extraction error: {e}")
+    except Exception:
+        pass
     return None
 
 
@@ -190,50 +183,22 @@ def analyze_insurance_card(
             "confidence": 0.0,
         }
 
-    # Fast-path for text input
     if text_content and not image_b64:
-        txt = text_content.lower()
-        ins_name = "UnitedHealthcare" if ("united" in txt or "uhc" in txt) else (
-            "Aetna Health" if "aetna" in txt else (
-                "Blue Cross Blue Shield" if ("blue" in txt or "bcbs" in txt) else "Demo Insurance Co."
-            )
-        )
-        ins_id = "uhc" if "united" in txt or "uhc" in txt else (
-            "aetna" if "aetna" in txt else (
-                "bcbs" if ("blue" in txt or "bcbs" in txt) else "demo-insurer"
-            )
-        )
-        plan_name = "UHC Choice Plus PPO" if ins_id == "uhc" else (
-            "Open Choice POS II (Commercial)" if ins_id == "aetna" else (
-                "Federal Employee Program (FEP PPO)" if ins_id == "bcbs" else "Commercial Comprehensive PPO"
-            )
-        )
-        plan_id = "UHC-CHOICE-PLUS" if ins_id == "uhc" else (
-            "AETNA-POS-II" if ins_id == "aetna" else (
-                "BCBS-FEP-PPO" if ins_id == "bcbs" else "PLAN-GOLD"
-            )
-        )
-
-        member_match = re.search(r"(?:member\s*(?:id)?|subscriber\s*(?:id)?|id)[:\s#]+([A-Za-z0-9\-]+)", text_content, re.IGNORECASE)
-        member_id = member_match.group(1).strip() if member_match else "UHC-9928109"
-        if member_id.lower() == "id":
-            sub_m = re.search(r"id[:\s#]+([A-Za-z0-9\-]+)", text_content, re.IGNORECASE)
-            if sub_m:
-                member_id = sub_m.group(1).strip()
-
-        grp_match = re.search(r"(?:group|grp)[:\s#]*([A-Za-z0-9\-]+)", text_content, re.IGNORECASE)
-        group_no = grp_match.group(1).strip() if grp_match else "GRP-710294"
-
-        return {
-            "insurer_name": ins_name,
-            "insurer_id": ins_id,
-            "member_ref": member_id,
-            "group_number": group_no,
-            "plan_name": plan_name,
-            "plan_id": plan_id,
-            "copay": "$30 Specialist",
-            "confidence": 0.99,
-        }
+        from app.intelligence.policy_extractor import _deterministic_fallback_extractor
+        # Reuse explicit identity recognition, without guessing a plan from the payer.
+        extracted = _deterministic_fallback_extractor({"raw_text": "Insurance policy card\n" + text_content})
+        payer = extracted[0] if extracted else None
+        def field(pattern):
+            match = re.search(pattern, text_content, re.I)
+            return match.group(1).strip() if match else None
+        return {"insurer_id": payer.insurer_id if payer else None,
+                "insurer_name": payer.insurer_name if payer else None,
+                "plan_id": field(r"Plan(?: ID)?\s*[:#]\s*([^\n]+)"),
+                "plan_name": field(r"Plan Name\s*[:#]\s*([^\n]+)"),
+                "member_ref": field(r"(?:Member|Subscriber)(?: ID)?\s*[:#]\s*([A-Z0-9-]+)"),
+                "group_number": field(r"Group(?: Number)?\s*[:#]\s*([A-Z0-9-]+)"),
+                "confidence": None,
+                "validation_warnings": ["Review extracted identifiers; absent fields remain unknown."]}
 
     parts = []
     if image_b64:
@@ -253,30 +218,23 @@ def analyze_insurance_card(
         "rx_bin (if present)."
     )
     if text_content:
+        text_content, _ = redact_sensitive_identifiers(text_content)
         prompt += f"\n\nCard Text Content:\n{text_content}"
 
     parts.append({"text": prompt})
 
     sys_instr = (
         "You are an expert healthcare insurance claim intake assistant. "
-        "Analyze insurance card images or text with high accuracy. Output strict JSON only."
+        "Analyze synthetic insurance card images or text. Missing fields must be null; never guess plans or identifiers. Output strict JSON only."
     )
 
     result = call_gemini_extraction(parts, sys_instr)
     if result:
         return result
 
-    # Default fallback
-    return {
-        "insurer_name": "UnitedHealthcare",
-        "insurer_id": "uhc",
-        "member_ref": "UHC-9928109",
-        "group_number": "GRP-710294",
-        "plan_name": "UHC Choice Plus PPO",
-        "plan_id": "UHC-CHOICE-PLUS",
-        "copay": "$30",
-        "confidence": 0.90,
-    }
+    return {"insurer_name": None, "insurer_id": None, "member_ref": None,
+            "group_number": None, "plan_name": None, "plan_id": None, "copay": None,
+            "confidence": None, "validation_warnings": ["Insurance card could not be extracted. Supply verified payer and plan."]}
 
 
 def redact_sensitive_identifiers(text: str) -> tuple[str, bool]:
@@ -319,7 +277,7 @@ def analyze_clinical_document(
                     extracted_pdf_text = "\n".join(pdf_text_pages)
                     text_content = (text_content + "\n" + extracted_pdf_text) if text_content else extracted_pdf_text
             except Exception as e:
-                print(f"pypdf extraction notice: {e}")
+                pass
         elif mime.startswith("text/") or mime in ("application/json", "application/octet-stream"):
             try:
                 decoded = base64.b64decode(clean_b64).decode("utf-8")
@@ -334,128 +292,23 @@ def analyze_clinical_document(
     if text_content:
         text_content, pii_redacted = redact_sensitive_identifiers(text_content)
 
-    # Fast deterministic matching for test fixtures and common clinical terms
+    # Narrow text extraction uses only explicit billing codes and labelled fields.
     if text_content and not doc_b64:
-        txt = text_content.lower()
-        ins_name = "UnitedHealthcare" if ("united" in txt or "uhc" in txt) else (
-            "Aetna Health" if "aetna" in txt else (
-                "Blue Cross Blue Shield" if ("blue" in txt or "bcbs" in txt) else None
-            )
-        )
-        ins_id = "uhc" if ("united" in txt or "uhc" in txt) else (
-            "aetna" if "aetna" in txt else (
-                "bcbs" if ("blue" in txt or "bcbs" in txt) else None
-            )
-        )
-
-        if "humira" in txt or "adalimumab" in txt:
-            return {
-                "patient_name": "Johnathan E. Miller",
-                "specialty": "Gastroenterology",
-                "service_date": "2026-11-12",
-                "diagnosis_code": "M05.79",
-                "diagnosis_desc": "Rheumatoid Arthritis with rheumatoid factor of multiple sites without organ involvement",
-                "insurer_name": ins_name or "UnitedHealthcare",
-                "insurer_id": ins_id or "uhc",
-                "plan_name": "UHC Choice Plus PPO",
-                "member_ref": "UHC-9928109",
-                "group_number": "GRP-710294",
-                "items": [
-                    {
-                        "type": "drug",
-                        "code": "HUMIRA",
-                        "name": "Humira (Adalimumab) 40 mg/0.4 mL Subcutaneous Prefilled Pen",
-                        "quantity": 2,
-                        "source_text": "Humira (Adalimumab) 40 mg/0.4 mL",
-                    }
-                ],
-                "documents": ["Rheumatology Clinical Encounter Notes", "Baseline TB QuantiFERON Negative"],
-                "prior_approval_ref": None,
-                "confidence": None,
-                "pii_redacted": pii_redacted,
-                "validation_warnings": [],
-            }
-        elif "keytruda" in txt or "pembrolizumab" in txt:
-            return {
-                "patient_name": "Eleanor Vance",
-                "specialty": "Oncology",
-                "service_date": "2026-11-10",
-                "diagnosis_code": "C34.90",
-                "diagnosis_desc": "Non-Small Cell Lung Carcinoma (Stage IV)",
-                "insurer_name": ins_name or "Aetna Health",
-                "insurer_id": ins_id or "aetna",
-                "plan_name": "Open Choice POS II (Commercial)",
-                "member_ref": "W92837482",
-                "group_number": "GRP-881290-001",
-                "items": [
-                    {
-                        "type": "drug",
-                        "code": "KEYTRUDA",
-                        "name": "Keytruda (Pembrolizumab) 200mg IV Infusion",
-                        "quantity": 1,
-                        "source_text": "Keytruda (Pembrolizumab) 200mg IV Infusion",
-                    }
-                ],
-                "documents": ["Oncology Clinical Summary"],
-                "prior_approval_ref": None,
-                "confidence": None,
-                "pii_redacted": pii_redacted,
-                "validation_warnings": [],
-            }
-        elif "ozempic" in txt or "semaglutide" in txt:
-            return {
-                "patient_name": "Robert Hayes",
-                "specialty": "Gastroenterology",
-                "service_date": "2026-11-05",
-                "diagnosis_code": "E66.01",
-                "diagnosis_desc": "Morbid Obesity without Type 2 Diabetes",
-                "insurer_name": ins_name or "Blue Cross Blue Shield",
-                "insurer_id": ins_id or "bcbs",
-                "plan_name": "Federal Employee Program (FEP PPO)",
-                "member_ref": "FEP-4029108",
-                "group_number": "GRP-005890",
-                "items": [
-                    {
-                        "type": "drug",
-                        "code": "OZEMPIC",
-                        "name": "Ozempic (Semaglutide) 1mg/dose subcutaneous pen",
-                        "quantity": 1,
-                        "source_text": "Ozempic (Semaglutide) 1mg/dose",
-                    }
-                ],
-                "documents": ["Encounter Note"],
-                "prior_approval_ref": None,
-                "confidence": None,
-                "pii_redacted": pii_redacted,
-                "validation_warnings": [],
-            }
-        elif "knee" in txt or "arthroplasty" in txt or "joint" in txt or "proc-1" in txt:
-            return {
-                "patient_name": "Marcus Brody",
-                "specialty": "Orthopedics",
-                "service_date": "2026-11-15",
-                "diagnosis_code": "M17.11",
-                "diagnosis_desc": "Unilateral Primary Osteoarthritis Right Knee",
-                "insurer_name": ins_name or "UnitedHealthcare",
-                "insurer_id": ins_id or "uhc",
-                "plan_name": "UHC Choice Plus PPO",
-                "member_ref": "UHC-902837110",
-                "group_number": "GRP-710294",
-                "items": [
-                    {
-                        "type": "procedure",
-                        "code": "PROC-1",
-                        "name": "Total Knee Arthroplasty (CPT 27447)",
-                        "quantity": 1,
-                        "source_text": "Total Knee Arthroplasty (PROC-1 / CPT 27447)",
-                    }
-                ],
-                "documents": ["Orthopedic Consult Notes", "Pre-Op Clearance"],
-                "prior_approval_ref": "PA-UHC-88219",
-                "confidence": None,
-                "pii_redacted": pii_redacted,
-                "validation_warnings": [],
-            }
+        card = analyze_insurance_card(text_content=text_content)
+        code_matches = re.findall(r"\b(?:[A-Z]\d{4}|\d{5}|(?:DRUG|PROC|SVC)-[A-Z0-9]+)\b", text_content)
+        items = [{"type": "drug" if code.startswith(("J", "DRUG-")) else "procedure" if code.isdigit() or code.startswith("PROC-") else "service",
+                  "code": code, "name": code, "quantity": 1, "source_text": code} for code in dict.fromkeys(code_matches)]
+        def field(pattern):
+            match = re.search(pattern, text_content, re.I)
+            return match.group(1).strip() if match else None
+        service = field(r"(?:Service Date|Date of Service)\s*:\s*(\d{4}-\d{2}-\d{2})")
+        return {**card, "patient_name": None, "specialty": field(r"Specialty\s*:\s*([^\n]+)") or "General Medicine",
+                "service_date": service, "diagnosis_code": field(r"(?:Diagnosis|ICD-10)(?: Code)?\s*:\s*([A-Z]\d{2}(?:\.\d+)?)"),
+                "diagnosis_desc": None, "items": items, "documents": [],
+                "prior_approval_ref": field(r"(?:Prior Authorization|Prior Approval|PA)(?: Ref| Reference)?\s*:\s*([A-Z0-9-]+)"),
+                "confidence": None, "pii_redacted": pii_redacted, "images_deidentified": False,
+                "validation_warnings": (["No explicit billing code detected; reviewer code mapping is required."] if not items else []) +
+                    (["Service date not specified in clinical note."] if not service else [])}
 
     parts = []
     if doc_b64:
@@ -488,7 +341,7 @@ def analyze_clinical_document(
 
     sys_instr = (
         "You are an expert clinical documentation specialist. "
-        "Extract diagnosis, billing items, and attached paperwork. Output strict JSON only. "
+        "Extract synthetic diagnosis, billing items, and attached paperwork. Absent fields must be null. Output strict JSON only. "
         "Do not invent drugs or codes if they do not appear in the source."
     )
 
@@ -527,6 +380,6 @@ def analyze_clinical_document(
         "documents": [],
         "prior_approval_ref": None,
         "confidence": None,
-        "pii_redacted": pii_redacted,
+        "pii_redacted": pii_redacted, "images_deidentified": False,
         "validation_warnings": warnings,
     }

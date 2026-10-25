@@ -1,0 +1,33 @@
+{
+  "cms": {
+    "http_status": 200,
+    "source_url": "https://www.cms.gov/medicare-coverage-database/view/ncd.aspx?ncdid=372",
+    "title": "Next Generation Sequencing (NGS)",
+    "download_bytes": 143919,
+    "policy_text_characters": 5265,
+    "meaningful_hash": "06c977e1346aa1e414c704fdbef600960873e40bf0af7813b88ae214503f8357",
+    "second_fetch_same_policy": true,
+    "first_pipeline_status": "extraction_failed",
+    "repeat_pipeline_status": "extraction_failed",
+    "proposals_staged": 0,
+    "repeat_proposals": 0,
+    "approved_rules_applied": 0,
+    "extraction_error": "extraction_failed: ValueError. Check source availability and extraction configuration; retry is allowed."
+  },
+  "gemini_diagnostics": {
+    "method": "deterministic",
+    "extraction_error": "Gemini extraction failed (ReadTimeout). Deterministic fallback applied.",
+    "insurer": "aetna",
+    "plans": [
+      "PLAN-AUDIT"
+    ],
+    "code": "J1234",
+    "effective_from": "2026-11-01",
+    "evidence_verified": true
+  },
+  "gemini": {
+    "status": "failed",
+    "error_type": "AssertionError",
+    "reason": "Live extraction/validation/approval assertion failed; do not treat fallback as a live success."
+  }
+}
