@@ -30,7 +30,7 @@ def run_impact_analysis(source_event_desc: str = "policy sync", data_store=None)
             for alert in active:
                 alert.status = AlertStatus.SUPERSEDED
                 db.record_audit("ALERT_SUPERSEDED", {"alert_id": alert.alert_id, "case_id": case.case_id})
-            proposal = next((p for p in db.proposals.values() if p.resulting_rule_id == iv.rule_id
+            proposal = next((p for p in db.proposals.values() if iv.rule_id is not None and p.resulting_rule_id == iv.rule_id
                              and p.resulting_rule_version == iv.rule_version), None)
             alert = Alert(
                 alert_id=f"A-{uuid4().hex[:12].upper()}", case_id=case.case_id, item_code=iv.item.code,

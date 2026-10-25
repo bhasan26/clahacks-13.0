@@ -59,6 +59,7 @@ from app.domain.models import (
     utc_now,
 )
 from app.engine.checker import evaluate_case
+from app.domain.sync_models import PolicyCandidate, PolicyDocumentVersion, SyncSource, SyncRun
 
 
 class DataStore:
@@ -67,7 +68,7 @@ class DataStore:
         value = os.environ.get("COVERAGEGUARD_STATE_PATH")
         if value == "" or not getattr(self, "_persistent", True):
             return None
-        return Path(value) if value else Path(__file__).resolve().parents[2] / "data" / "state.json"
+        return Path(value) if value else Path(__file__).resolve().parents[2] / "data" / "coverageguard.sqlite3"
 
     @serialized
     def save_checkpoint(self):
@@ -77,11 +78,15 @@ class DataStore:
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        mappings = ("rules", "bulletins", "cases", "proposals", "extracted_documents", "alerts", "official_sources")
+        mappings = ("rules", "bulletins", "cases", "proposals", "extracted_documents", "alerts", "official_sources", "policy_catalog", "policy_versions", "sync_sources", "sync_runs")
         data = {name: {k: v.model_dump(mode="json") for k, v in getattr(self, name).items()} for name in mappings}
         data.update(updates=[v.model_dump(mode="json") for v in self.updates],
                     source_history=[v.model_dump(mode="json") for v in self.source_history],
                     audit_log=self.audit_log, demo_mode=self.demo_mode, clean_claims_target=self.clean_claims_target)
+        if path.suffix in {".sqlite3", ".db"}:
+            from app.db.persistence import write_snapshot
+            write_snapshot(path, data)
+            return
         temporary = path.with_suffix(".tmp")
         with open(temporary, "w", encoding="utf-8") as handle:
             os.chmod(temporary, 0o600)
@@ -93,19 +98,33 @@ class DataStore:
     def load_checkpoint(self):
         import json
         path = self._checkpoint_path()
-        if path is None or not path.exists():
+        if path is None:
             return
-        data = json.loads(path.read_text())
+        if not path.exists():
+            legacy = path.parent / "state.json"
+            if path.suffix not in {".sqlite3", ".db"} or not legacy.exists():
+                return
+            data = json.loads(legacy.read_text())
+        elif path.suffix in {".sqlite3", ".db"}:
+            from app.db.persistence import read_snapshot
+            data = read_snapshot(path)
+        else:
+            data = json.loads(path.read_text())
         models = {"rules": Rule, "bulletins": PolicyBulletin, "cases": Case,
                   "proposals": ProposedPolicyChange, "extracted_documents": ExtractedDocumentResult,
-                  "alerts": Alert, "official_sources": OfficialPolicySource}
+                  "alerts": Alert, "official_sources": OfficialPolicySource,
+                  "policy_catalog": PolicyCandidate, "policy_versions": PolicyDocumentVersion, "sync_sources": SyncSource, "sync_runs": SyncRun}
         for name, model in models.items():
-            setattr(self, name, {k: model.model_validate(v) for k, v in data[name].items()})
+            setattr(self, name, {k: model.model_validate(v) for k, v in data.get(name, {}).items()})
         self.updates = [InsurerUpdateEntry.model_validate(v) for v in data["updates"]]
         self.source_history = [SourceCheckHistory.model_validate(v) for v in data["source_history"]]
         self.audit_log = data["audit_log"]
         self.demo_mode = data["demo_mode"]
         self.clean_claims_target = data["clean_claims_target"]
+        for run in self.sync_runs.values():
+            if run.status == "running":
+                run.status = "interrupted"
+                run.error = "Previous sync interrupted; unprocessed documents remain retryable."
         for source in self.official_sources.values():
             if source.status == "connected" and not source.processed_at:
                 source.status = "active"
@@ -129,6 +148,10 @@ class DataStore:
         self.demo_mode: bool = os.environ.get("DEMO_MODE", "false").lower() in ("true", "1")
         self.official_sources: Dict[str, OfficialPolicySource] = {}
         self.source_history: List[SourceCheckHistory] = []
+        self.policy_catalog = {}
+        self.policy_versions = {}
+        self.sync_sources = {}
+        self.sync_runs = {}
 
         # Start clean by default with zero demo entries
         self.reset_state(seed_demo=False)
@@ -173,6 +196,10 @@ class DataStore:
         self.alerts.clear()
         self.official_sources.clear()
         self.source_history.clear()
+        self.policy_catalog.clear()
+        self.policy_versions.clear()
+        self.sync_sources.clear()
+        self.sync_runs.clear()
         self.clean_claims_target = 85.0
         self.is_check_failed = False
         self.last_check_time = "Live"
@@ -845,14 +872,22 @@ class DataStore:
         # Validate a copy: a rejected edit must not partially mutate stored evidence.
         allowed = {"insurer_id", "insurer_name", "plan_ids", "target_type", "target_code", "target_name",
                    "policy_title", "policy_reference", "proposed_effect", "effective_from", "effective_to",
-                   "conditions", "change_type", "evidence_confirmed_by_reviewer"}
+                   "conditions", "change_type", "evidence_confirmed_by_reviewer", "jurisdictions", "code_system", "scope_verified", "billing_articles_verified"}
         edits = edited_fields or {}
         if set(edits) - allowed:
             raise ValueError("Unsupported reviewer correction field.")
         proposal = ProposedPolicyChange.model_validate({**proposal.model_dump(), **edits})
         if proposal.evidence_confirmed_by_reviewer and not reviewer_notes:
             raise ValueError("Record how the original evidence was visually verified in reviewer notes.")
+        if proposal.catalog_id:
+            candidate=self.policy_catalog.get(proposal.catalog_id)
+            if not candidate or candidate.revision!=proposal.source_revision or candidate.document_id!=proposal.document_id or candidate.status in {"extraction_failed", "fetch_failed", "access_restricted", "not_in_latest_index"}:
+                raise ValueError("This proposal is not the latest discovered policy revision. Refresh and review the current version.")
+            if proposal.scope_verified and not reviewer_notes:
+                raise ValueError("Record verification of plan, jurisdiction and source scope in reviewer notes.")
         new_rule = build_proposed_rule(proposal, self.get_all_rules())
+        if proposal.extraction_method and not proposal.is_synthetic and proposal.scope_verified and not reviewer_notes:
+            raise ValueError("Record verification of exact insurer, plan and jurisdiction in reviewer notes.")
         before = {c.case_id: evaluate_case(c, self.get_all_rules()) for c in self.cases.values()}
         proposal.review_state = "approved"
         proposal.approved_at = utc_now()
@@ -896,6 +931,13 @@ class DataStore:
             "document": proposal.document_name, "affected_cases_count": len(affected),
             "affected_case_ids": affected, "reviewer_corrections": edits,
         }, actor="claims-reviewer")
+        if proposal.catalog_id:
+            candidate=self.policy_catalog[proposal.catalog_id]
+            candidate.pending_proposal_ids=[pid for pid in candidate.pending_proposal_ids if pid!=proposal_id]
+            if not candidate.pending_proposal_ids:candidate.status="reviewed"
+            for version in self.policy_versions.values():
+                if proposal_id in version.proposal_ids:
+                    version.verification_status="approved" if all(self.proposals[pid].review_state=="approved" for pid in version.proposal_ids) else "partially_reviewed"
         self.save_checkpoint()
         return new_rule, affected
 

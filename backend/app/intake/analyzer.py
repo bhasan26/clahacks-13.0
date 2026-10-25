@@ -1,7 +1,7 @@
 """
-CoverageGuard AI Multimodal Intake Analyzer.
-Uses Gemini 3 Flash to read insurance cards and clinical documents,
-extracting structured entities and linking them directly to insurer policy bulletins.
+Local-only synthetic clinical intake.
+Selectable text is parsed locally; scanned images require manual structured entry.
+Clinical files, member references and identifiers are never sent to external AI.
 """
 
 import os
@@ -141,27 +141,7 @@ def call_gemini_extraction(
     parts: List[Dict[str, Any]],
     system_instruction: str,
 ) -> Optional[Dict[str, Any]]:
-    """Calls Gemini 3 Flash with strict JSON schema."""
-    api_key = get_gemini_api_key()
-    if not api_key:
-        return None
-
-    from app.intelligence.policy_extractor import gemini_endpoint
-    url = gemini_endpoint()
-    payload = {
-        "contents": [{"parts": parts}],
-        "systemInstruction": {"parts": [{"text": system_instruction}]},
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
-
-    try:
-        with httpx.Client(timeout=float(os.environ.get("GEMINI_TIMEOUT_SECONDS", "60"))) as client:
-            resp = client.post(url, json=payload, headers={"x-goog-api-key": api_key})
-            if resp.status_code == 200:
-                text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(text)
-    except Exception:
-        pass
+    """Clinical AI transmission is disabled; extraction stays local in this prototype."""
     return None
 
 
@@ -276,6 +256,7 @@ def analyze_clinical_document(
                 if pdf_text_pages:
                     extracted_pdf_text = "\n".join(pdf_text_pages)
                     text_content = (text_content + "\n" + extracted_pdf_text) if text_content else extracted_pdf_text
+                    doc_b64 = None
             except Exception as e:
                 pass
         elif mime.startswith("text/") or mime in ("application/json", "application/octet-stream"):

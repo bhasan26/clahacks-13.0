@@ -30,7 +30,7 @@ def format_date_plain(d: Optional[date]) -> str:
     return d.strftime("%-d %b %Y")
 
 
-from app.engine.matcher import match_insurer, match_plan, match_item_code, normalize_insurer_id
+from app.engine.matcher import match_insurer, match_plan, match_item_code, normalize_insurer_id, match_jurisdiction
 
 
 def normalize_insurer(ins: Optional[str]) -> str:
@@ -131,6 +131,11 @@ def check_item(
         r
         for r in rules
         if is_rule_applicable(r, case.insurer_id, case.plan_id, item, governing_date)
+        and not (case.policy_environment == "official" and normalize_insurer_id(case.insurer_id) == "bcbs")
+        and r.scope_verified and r.verification_status == "approved"
+        and match_jurisdiction(r.jurisdictions, case.jurisdiction)
+        and (not r.target.code_system or r.target.code_system == item.code_system)
+        and (case.policy_environment == "demo" or not r.is_synthetic)
     ]
 
     best_rule, has_conflict = select_best_rule(applicable_rules, case.plan_id)
@@ -244,9 +249,18 @@ def check_item(
                 action_guidance=guidance or [f"Obtain {docs_str} from medical records department and attach to claim file."],
             )
 
+    unsupported=set((best_rule.conditions or {})) - {"requires_prior_approval", "required_documents"}
+    if unsupported or (best_rule.effect == RuleEffect.REQUIRES_DOCUMENTS and not (best_rule.conditions or {}).get("required_documents")):
+        sentence=f"{item_display} has policy conditions that require employee verification."
+        action="Verify the remaining clinical/benefit criteria against the source; do not assume coverage."
+        return ItemVerdict(item=item,result="Value wrong",rule_id=best_rule.rule_id,rule_version=best_rule.version,
+            effective_date=eff_str,plain_sentence=sentence,rule_reference=rule_ref,what_to_do=action,
+            full_issue_text=f"{sentence} {rule_ref} {action}",source_title=src_title,source_url=src_url,
+            official_reference_url=official_ref,bulletin_summary=b_summary,action_guidance=[action])
+
     # 5. Covered
     sentence = f"{item_display} is covered under current policy."
-    action = "File is ready to submit."
+    action = "No issue detected under this checked rule. Staff must review the complete claim before submission."
     return ItemVerdict(
         item=item,
         result="Covered",
@@ -261,7 +275,7 @@ def check_item(
         source_url=src_url,
         official_reference_url=official_ref,
         bulletin_summary=b_summary,
-        action_guidance=guidance or ["Clean claim: ready for electronic clearinghouse submission."],
+        action_guidance=guidance or ["Review all checked rules and member benefits; this is not a payment guarantee."],
     )
 
 

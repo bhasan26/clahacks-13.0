@@ -2,8 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { InsurerConnectionInfo } from '../types';
 
 interface SidebarProps {
-  activeTab: 'dashboard' | 'cases' | 'updates' | 'intelligence';
-  setActiveTab: (tab: 'dashboard' | 'cases' | 'updates' | 'intelligence') => void;
+  activeTab: 'dashboard' | 'cases' | 'updates' | 'intelligence' | 'monitoring';
+  setActiveTab: (tab: 'dashboard' | 'cases' | 'updates' | 'intelligence' | 'monitoring') => void;
   connection: InsurerConnectionInfo | null;
   onRunCheckNow?: () => void;
   onToggleFail?: () => void;
@@ -31,8 +31,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, []);
 
   const isFailed = connection?.is_check_failed ?? false;
-  const insurerName = connection?.insurer_name || 'Demo Insurance Co.';
-  const lastCheck = connection?.last_check_time || '06:00 today';
+  const insurerName = 'Policy source status';
+  const lastCheck = connection?.last_check_time || 'No source sync recorded';
 
   const navItems = [
     {
@@ -46,16 +46,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'cases' as const,
-      label: 'Cases',
+      label: 'Claims',
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
       ),
     },
+    { id: 'monitoring' as const, label: 'Policy Monitoring', icon: <span aria-hidden="true">↻</span> },
     {
       id: 'updates' as const,
-      label: 'Updates',
+      label: 'Alerts',
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
@@ -64,8 +65,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'intelligence' as const,
-      label: 'Policy Intelligence',
-      badge: 'Multimodal',
+      label: 'Policy Review',
+      badge: 'Supporting tool',
       icon: (
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -122,7 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Bottom Insurer Connection Chip with Popover */}
       <div className="pt-4 border-t border-[#EAEFEA] relative" ref={popoverRef}>
         <div className="text-[10px] font-bold text-[#12544F]/60 uppercase tracking-wider mb-2 px-1">
-          Insurer System
+          Hospital-side prototype
         </div>
 
         {/* Connection Chip */}
@@ -146,12 +147,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           </div>
           <span className="text-[10px] text-[#12544F]/70 shrink-0 font-bold ml-1">
-            {isFailed ? 'Pending' : 'Active'}
+            {'Synthetic only'}
           </span>
         </button>
 
         <div className="mt-1 px-1 text-[11px] text-[#12544F]/60 truncate">
-          ● {isFailed ? 'Check pending' : 'Access active'}
+          ● {'See Policy Monitoring'}
         </div>
 
         {/* Small Popover on Chip Click: "Read-only" appears only here */}
@@ -181,7 +182,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     isFailed ? 'text-[#D97706]' : 'text-[#2A835F]'
                   }`}
                 >
-                  {isFailed ? 'Check pending' : 'Access active'}
+                  {'See Policy Monitoring'}
                 </span>
               </div>
 

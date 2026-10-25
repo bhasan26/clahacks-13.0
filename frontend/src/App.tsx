@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { PolicyMonitoring } from './components/PolicyMonitoring';
+import { ClaimsWorkspace } from './components/ClaimsWorkspace';
+import { WorkflowOverview, ClaimAlerts } from './components/WorkflowOverview';
 import { Sidebar } from './components/Sidebar';
 import { DashboardPage } from './components/DashboardPage';
 import { CasesPage } from './components/CasesPage';
@@ -27,7 +30,9 @@ import {
 } from './types';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'cases' | 'updates' | 'intelligence'>('dashboard');
+  const [affectedFilterIds,setAffectedFilterIds]=useState<string[]>([]);
+  const [reviewDocumentId, setReviewDocumentId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'cases' | 'updates' | 'intelligence' | 'monitoring'>('dashboard');
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [cases, setCases] = useState<Case[]>([]);
   const [updates, setUpdates] = useState<InsurerUpdateEntry[]>([]);
@@ -71,16 +76,7 @@ export function App() {
 
   useEffect(() => {
     loadAll();
-    const interval = setInterval(async () => {
-      // Periodic background poll
-      try {
-        const [dash, conn] = await Promise.all([fetchDashboard(), fetchConnection()]);
-        setDashboardData(dash);
-        setConnection(conn);
-      } catch (err) {
-        // silent background poll error
-      }
-    }, 5000);
+    const interval = setInterval(loadAll, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -100,6 +96,7 @@ export function App() {
   };
 
   const handleNavigateToCasesWithFilter = (status?: string, specialty?: string) => {
+    setAffectedFilterIds([]);
     setInitialStatusFilter(status || 'All');
     setInitialSpecialtyFilter(specialty || 'All');
     setActiveTab('cases');
@@ -107,7 +104,8 @@ export function App() {
 
   const handleViewAffectedCases = (caseIds: string[]) => {
     // When clicking "Affects N open cases", navigate to Cases
-    setInitialStatusFilter('Needs attention');
+    setAffectedFilterIds(caseIds);
+    setInitialStatusFilter('All');
     setInitialSpecialtyFilter('All');
     setActiveTab('cases');
     showToast(`Filtered to open cases affected by policy update (${caseIds.join(', ')})`);
@@ -176,6 +174,7 @@ export function App() {
       <Sidebar
         activeTab={activeTab}
         setActiveTab={(tab) => {
+          setAffectedFilterIds([]);
           setInitialStatusFilter('All');
           setInitialSpecialtyFilter('All');
           setActiveTab(tab);
@@ -197,33 +196,27 @@ export function App() {
         {/* Page Routing */}
         <main className="flex-1 pb-24">
           {activeTab === 'dashboard' && (
-            <DashboardPage
+            <><WorkflowOverview /><DashboardPage
               data={dashboardData}
               onNavigateToUpdates={() => setActiveTab('updates')}
               onNavigateToCasesWithFilter={handleNavigateToCasesWithFilter}
               onUpdateTarget={handleUpdateTarget}
-            />
+            /></>
           )}
 
-          {activeTab === 'cases' && (
-            <CasesPage
-              cases={cases}
-              onSelectCase={handleOpenCase}
-              onOpenUploadModal={() => setIsUploadOpen(true)}
-              initialStatusFilter={initialStatusFilter}
-              initialSpecialtyFilter={initialSpecialtyFilter}
-            />
-          )}
+          {activeTab === 'cases' && <ClaimsWorkspace initialStatusFilter={initialStatusFilter} initialSpecialtyFilter={initialSpecialtyFilter} caseIds={affectedFilterIds} onSelect={handleOpenCase} onClinicalUpload={()=>setIsUploadOpen(true)} onChanged={loadAll} />}
+          {activeTab === 'monitoring' && <PolicyMonitoring onReview={id=>{setReviewDocumentId(id);setActiveTab('intelligence');}} onChanged={loadAll} />}
 
           {activeTab === 'updates' && (
-            <UpdatesPage
+            <><ClaimAlerts cases={cases} onSelect={handleOpenCase}/><UpdatesPage
               updates={updates}
               onViewAffectedCases={handleViewAffectedCases}
-            />
+            /></>
           )}
 
           {activeTab === 'intelligence' && (
             <PolicyIntelligence
+              initialDocumentId={reviewDocumentId}
               onPolicyApproved={async (affectedIds) => {
                 showToast(`Policy approved! ${affectedIds.length} hospital claims updated.`);
                 await loadAll();

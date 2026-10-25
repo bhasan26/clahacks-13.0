@@ -1,103 +1,106 @@
 # CoverageGuard
 
-CoverageGuard is a CalHacks prototype for reviewing insurance policy documents against **synthetic claims**. FastAPI, React/TypeScript, Gemini extraction, and a deterministic rule engine implement:
+CoverageGuard helps hospital billing employees check **synthetic pending claims** and track insurance policy changes. It extends the existing FastAPI, React/TypeScript, Gemini policy extraction, deterministic engine, human review, version history and alerting implementation.
 
-**Public policy source or uploaded document → proposed rules → source validation → claim-impact preview → human review → versioned rules → claim re-evaluation → alerts and audit history.**
+**Workflow A — Before submission:** import or upload a synthetic claim → identify exact insurer, plan, state, billing code and service date → evaluate approved, scoped, current local rules → show evidence, missing authorization/documents and employee follow-up. Missing or unverified policies produce **Unable to verify**, never claim approval. Findings cannot guarantee payment.
 
-Seeded commercial-payer rules and patient presets are synthetic examples. Public CMS retrieval is not a commercial insurer partnership, authenticated insurer API integration, eligibility verification, or a complete claims-adjudication service. No HIPAA compliance or production readiness is claimed.
+**Workflow B — Policy monitoring:** the backend discovers policy metadata → selects relevant documents within a bounded budget → detects changes → retains evidence and proposed versions → a person verifies the policy representation → deterministic re-evaluation identifies affected claims and reconciles alerts. A delay resolves the relevant issues while preserving unrelated requirements. The default enabled schedule is every 24 hours; the browser only displays results.
 
-## Verified audit status
+The independent hospital and insurer simulators demonstrate both workflows over real HTTP. They are prominently **DEMO / SIMULATED**, with no insurer affiliation. Real official source access is separately reported below. This is a single-worker local prototype for synthetic records, with no HIPAA or production-readiness claim.
 
-Audit baseline: `d25cead`; working branch: `codex/coverageguard-reliability`.
+## Run the complete demonstration
 
-- Backend: **117 pytest tests passed**, including PDF upload, separate delay notice, full re-evaluation, alerts, audit, retries, matching boundaries, concurrency, and persistence.
-- Existing acceptance runner: **38 checks passed**.
-- Frontend: TypeScript validation and Vite production build passed; Dashboard, Cases, Updates, and Policy Intelligence were inspected in Chrome.
-- Live CMS NCD 90.2: HTTP 200, 5,265 characters of extracted policy text, one explicitly labelled deterministic review proposal, then `unchanged` with zero duplicate proposals and no rules applied. This incomplete proposal requires reviewer clarification.
-- **Live Gemini extraction is not verified.** The existing key could list models, but generation returned HTTP 404 for `gemini-2.5-flash`, HTTP 429 for `gemini-3-flash-preview`, and a read timeout for `gemini-3.8-flash`. Mocked Gemini success/failure and deterministic workflows passed. Fallback is visibly identified and is never reported as live Gemini success.
-
-See [ENGINEERING_REPORT.md](ENGINEERING_REPORT.md) for findings, files, evidence, limitations, and the verification matrix. [PROGRESS.md](PROGRESS.md) records the current implementation status.
-
-## Run locally
-
-Requirements: Python 3.12+, Node.js 20.19+ or 22+, and macOS/Linux. The lightweight worker lock uses POSIX `flock`.
+Requirements: Python 3.12+, Node.js 20.19+ or 22+, macOS/Linux (POSIX process lock).
 
 ```bash
 python3 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements.txt
-cd frontend
-npm ci
-cd ..
+(cd frontend && npm ci)
 cp backend/.env.example backend/.env
+./scripts/run_demo.sh
 ```
 
-Add `GEMINI_API_KEY` to `backend/.env` if available. Keep the key server-side. `GEMINI_MODEL` defaults to `gemini-3.8-flash` and is configurable; verify model access for your own account using the [official Gemini model documentation](https://ai.google.dev/gemini-api/docs/models). Text-only deterministic assistance remains available without a key; scanned images require a functioning vision model plus human evidence verification.
+Open `http://127.0.0.1:5173`. The script starts four separate processes: hospital API on 8101, insurer API on 8102, CoverageGuard on 8000, frontend on 5173. It enables only the demo source schedule, defaults to daily synchronization and disables external AI. Stop with Ctrl-C. Keep these ports free; do not run `dev.sh` concurrently.
+
+For a short demonstration, start with:
 
 ```bash
-./dev.sh
+COVERAGEGUARD_CHECK_INTERVAL=2 ./scripts/run_demo.sh
 ```
 
-Backend: `http://127.0.0.1:8000`; frontend: `http://localhost:5173`. Start only **one API worker**. A process lock rejects a second worker; source checks and approvals also have in-process serialization. Automatic monitoring is off by default. Enable `COVERAGEGUARD_SCHEDULER_ENABLED=true` in the backend environment to poll configured sources every `COVERAGEGUARD_CHECK_INTERVAL` seconds (default 3600).
+1. Open **Policy Monitoring**. Click **Import hospital claims**. Forty synthetic claims arrive from the independent hospital service. Before policy review, findings are unable to verify.
+2. Click **Sync DEMO insurer** (or wait for the accelerated backend schedule). Inspect and approve the five **DEMO representations**. These approvals validate policy representations, not claims. Thirty-nine claims have no issue under simulated checked rules; H-003 has a separate missing authorization for HCPCS J1234.
+3. In **Claims**, add a synthetic UHC claim: insurer `uhc`, exact plan `DEMO-UHC-PPO`, state `CA`, procedure `27447`, code system `CPT`, service date `2026-11-12`, synthetic member reference. Explicitly select **Use SIMULATED policy rules**. The findings cite the reviewed simulated UHC rule. An official-environment claim or unknown plan stays unable to verify.
+4. In **Policy Monitoring**, publish the synthetic restriction. The insurer service publishes version 2, excluding the knee procedure from November 1. CoverageGuard detects it through its read-only connector. Inspect and approve the pending representation. Eight November UHC hospital claims are affected, plus the extra uploaded claim; earlier October claims and other insurers stay unchanged. Inspect **Alerts** and claim source evidence.
+5. Publish the delay notice. Review the detected version 3, effective December 1. November knee exclusion alerts close. H-003's unrelated J1234 authorization issue remains. Repeat synchronization: five unchanged documents, no duplicate versions.
 
-To start separately:
+The demo persists across restarts. For a fresh isolated workspace, select new paths rather than deleting existing data:
 
 ```bash
-backend/.venv/bin/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
-cd frontend
-npm run dev
+COVERAGEGUARD_STATE_PATH=/tmp/coverageguard-new-demo.sqlite3 \
+INSURER_SIMULATOR_STATE_PATH=/tmp/coverageguard-new-insurer.sqlite3 \
+COVERAGEGUARD_CHECK_INTERVAL=2 ./scripts/run_demo.sh
 ```
 
-The frontend proxy can use `COVERAGEGUARD_API_URL` for an alternate local backend. If you change the frontend origin, configure `COVERAGEGUARD_CORS_ORIGINS` accordingly. Do not expose the server publicly for patient workflows.
+## Official source support and honest limits
 
-## Review and data boundaries
+| Source | Actual verification | Current limitation |
+| --- | --- | --- |
+| [UnitedHealthcare commercial policies](https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html) | HTML/PDF adapter implemented; technical research found index/document access | Automatic indexing **disabled pending publisher authorization**. Public medical policies do not prove a member's benefits or exact plan scope. |
+| [Aetna medical CPBs](https://www.aetna.com/health-care-professionals/clinical-policy-bulletins/medical-clinical-policy-bulletins.html) | Published XML/HTML adapter implemented | Automatic indexing **disabled pending publisher authorization**. Exact member benefits and deviations remain unverified. |
+| [Anthem California](https://www.anthem.com/ca/provider/policies/clinical-guidelines/?cnslocale=en_US_ca) | Live directory discovery: **98 metadata entries** | Sample PDF denied by publisher robots policy; no bypass. Only `bcbs-anthem-ca`, never generic/nationwide BCBS. |
+| [CMS Medicare Coverage API](https://api.coverage.cms.gov/docs/) | Live documented API: **1,301 NCD/LCD metadata entries**, relevant NCD detail retrieved, **5,018 text characters** | Sample LCD metadata/detail returned **401** without a license token. Associated billing articles and MAC jurisdiction require review. No complete member-specific check demonstrated. |
 
-- Only synthetic patient information and synthetic upload fixtures are permitted in this prototype. The client supplies `X-Synthetic-Data: true`; direct API upload requests must explicitly supply it too. A header cannot detect real PHI—operators must keep real records out.
-- Regex text redaction is partial. Images and scanned pages are **not de-identified** and can be sent to Gemini as uploaded.
-- Local review mutations require a loopback client. If `COVERAGEGUARD_REVIEW_TOKEN` is configured, every mutation requires `X-Reviewer-Token`. Enter it in Policy Intelligence; it stays in the browser session. This is a local prototype boundary, not a user/role management system.
-- The allowed external hosts are `https://www.cms.gov` and `https://cms.gov`, including each redirect and followed PDF link. Arbitrary external URLs and private-address redirects are rejected.
-- Source fixture overrides are disabled unless explicitly enabled with `COVERAGEGUARD_ALLOW_SOURCE_FIXTURES=true`; fixture history is marked simulated.
-- Uploads have a 10 MB document limit, a 14 MB request limit, image validation and a 20-megapixel limit. PDF extraction is limited to ten pages, with warnings. Vision submission is limited to five scanned page images; review any omitted content separately.
+Source checks ran October 24, 2026 Pacific / October 25 UTC. **No real commercial source or CMS source achieved a complete verified claim check.** Metadata discovery and text retrieval are reported separately from usable approved rule extraction. See [ENGINEERING_REPORT.md](ENGINEERING_REPORT.md) and [recorded live results](verification/sync/live-sources.json).
 
-The app persists synthetic state to `backend/data/state.json` using an atomic local snapshot with file mode 0600. The snapshot includes claims, original extracted text/previews, proposals, rules, source hashes/history, alerts and audit records. It is ignored by Git. Set `COVERAGEGUARD_STATE_PATH` to choose another file, or to an empty string to disable persistence. Preserve this file when restarting a demo. Corrupt checkpoints fail startup rather than silently erasing history. This is not an encrypted medical-record database or tamper-proof audit system.
+UHC's [published terms](https://www.uhc.com/content/dam/uhcdotcom/en/npp/TOU-UHCPROVIDER-COM-EN.pdf) restrict harvesting; Aetna's [digital terms](https://www.aetna.com/legal-notices/digital-terms-of-use.html) require prior written consent for automated indexing. The server requires `COVERAGEGUARD_UHC_AUTHORIZATION_REFERENCE` / `COVERAGEGUARD_AETNA_AUTHORIZATION_REFERENCE` only after appropriate publisher permission. These operator attestations do not bypass robots, authentication or plan verification. CMS licensed access optionally uses server-side `CMS_LICENSE_TOKEN`; CoverageGuard does not accept license agreements for you.
 
-## Matching and approval
+## Configuration and persistence
 
-Insurer identity uses exact IDs or an explicit alias table. Plans require exact scope or an explicit `*` meaning all verified plans; empty plans never mean all plans. Type and code must match exactly. Unknown code/date/insurer/plan/effect remains unknown and blocks activation.
+For the main app without independent simulators, `./dev.sh` starts backend/frontend. Monitoring is off by default. Configure server environment before startup:
 
-Selectable-text extraction independently checks identifiers, plans, dates and quoted effects against source text. This is a guard against obvious unsupported values, not proof that complex policy semantics were interpreted correctly. Image-based evidence requires explicit visual confirmation and reviewer notes. All changes still require human approval.
+- `COVERAGEGUARD_SCHEDULER_ENABLED=true`: explicitly enable the backend worker.
+- `COVERAGEGUARD_CHECK_INTERVAL=86400`: daily schedule; positive seconds for a demo.
+- `COVERAGEGUARD_SCHEDULER_SOURCES=demo-insurer-api`: optional comma-separated source restriction. Omit to schedule all registered sources, subject to access gates.
+- `COVERAGEGUARD_SYNC_DOCUMENT_LIMIT=5`: relevant document processing budget per source/run (maximum 20).
+- `COVERAGEGUARD_STATE_PATH`: default `backend/data/coverageguard.sqlite3`; empty disables persistence. An explicitly selected `.json` path preserves legacy behavior. On first default SQLite startup, an existing sibling `state.json` is imported and retained.
+- `COVERAGEGUARD_REVIEW_TOKEN`: optional local mutation token; client sends `X-Reviewer-Token`. Enter it in Policy Review.
+- `COVERAGEGUARD_CORS_ORIGINS`: allowed frontend origins. `COVERAGEGUARD_API_URL` controls the frontend proxy target.
+- `COVERAGEGUARD_HOSPITAL_SIMULATOR_URL` / `COVERAGEGUARD_INSURER_SIMULATOR_URL`: fixed loopback HTTP origins with explicit ports; defaults 8101/8102. No arbitrary remote simulator URLs.
+- `SIMULATOR_ADMIN_TOKEN`: optional shared token for explicit simulator publication; never used to write to real insurers.
 
-Preview and approval use the same rule builder and deterministic evaluator. Preview does not save claims, rules or alerts. Counts refer to unique affected claims; existing risk is not counted as new risk. Approval records immutable prior rule versions and corrections, rechecks whole claims, and reconciles alerts. Delays and cancellations preserve unrelated problems. Dates use an inclusive start and exclusive end. Historical evaluation supports an `as_of` knowledge timestamp.
+SQLite stores transactional snapshots of claims, catalog records, retained source text, proposals, immutable rule/document versions, sync history, alerts and audit records; mode 0600. It has queryable identity/version columns and preserves the existing domain store. It is not encrypted storage or a multi-process database application. Run **one API worker**: a POSIX lock rejects competing workers. Do not use distinct lock paths for processes sharing a database.
 
-## Tests
+Only public/synthetic **policy documents** may use optional Gemini extraction (`GEMINI_API_KEY`, server-side `GEMINI_MODEL`). **Clinical files and identifiers never go to external AI**: clinical intake parses selectable text locally; scans/cards requiring OCR need manual structured entry. No-key policy extraction offers a conservative deterministic review fallback. Live Gemini generation remains unverified; the previous audit observed 404/429/timeouts and no new live success is claimed.
+
+All patient imports/uploads require `X-Synthetic-Data: true`; the UI supplies it. This attestation does not detect real PHI. Uploads enforce size/type limits. Policy retrieval enforces approved HTTPS hosts, per-hop redirect checks, robots restrictions, bounded downloads, retries, caching and throttling. Policy queries contain no names, member identifiers, diagnoses or clinical documents. Only explicit synthetic simulator controls publish demo rules; real insurer ingestion remains read-only.
+
+## Verification
 
 ```bash
 backend/.venv/bin/python -m pytest backend/tests -q
 backend/.venv/bin/python backend/tests/qa_e2e_runner.py
-cd frontend
-npm run build
+(cd frontend && npm run build)
 ```
 
-Pytest deliberately disables live AI and local checkpoint writes. External failures and successful model responses are mocked for repeatability. There are currently third-party FastAPI TestClient/PyMuPDF deprecation warnings.
+Latest: **157 pytest tests passed**, **38 acceptance checks passed**, TypeScript/Vite build passed. Dependency deprecation warnings remain. Existing tests were retained. New tests cover insurer/plan/region/code isolation, approval gates, privacy, retry/rollback, duplicate/race behavior, persistent versions and full restriction/delay impact.
 
-Opt-in live integration verification (synthetic data only):
+With the three services running, the following scripts reset **only the selected synthetic workspace** and record real HTTP results. Point them at the intended disposable demo server:
 
 ```bash
-PYTHONPATH=backend backend/.venv/bin/python backend/tests/live_verify.py
+COVERAGEGUARD_E2E_URL=http://127.0.0.1:8000 PYTHONPATH=backend \
+  backend/.venv/bin/python backend/tests/run_sync_demo_e2e.py
+# Requires the demo scheduler enabled with interval <= 5 seconds:
+COVERAGEGUARD_E2E_URL=http://127.0.0.1:8000 PYTHONPATH=backend \
+  backend/.venv/bin/python backend/tests/run_scheduled_demo_e2e.py
 ```
 
-The live script uses isolated in-memory state. It fetches CMS over real HTTP and, when a key is available, attempts an unfamiliar synthetic PDF → Gemini → preview → approval → alerts → audit workflow. Its JSON distinguishes live failure, deterministic fallback, and actual live success. Do not use a fallback result as evidence that Gemini worked. An explicit offline-extraction CMS check can use `COVERAGEGUARD_DISABLE_AI=true`.
+[Manual HTTP evidence](verification/sync/demo-http-e2e.json) verifies the extra upload, nine affected claims, source/version evidence, delay resolution and retained authorization. [Scheduled HTTP evidence](verification/sync/scheduled-http-e2e.json) verifies automatic detection with **zero explicit sync calls**. UI smoke checks cover Dashboard, Claims, Policy Monitoring, Alerts and preserved Policy Review.
 
-## CalHacks demonstration
+Opt-in official source verification (no patient data, respects configured authorization gates):
 
-1. Start both servers. Use synthetic data only. Seed the existing 40-claim demonstration explicitly:
-   ```bash
-   curl -X POST http://127.0.0.1:8000/api/simulator/reset
-   ```
-   Include `X-Reviewer-Token` if you configured a token.
-2. Inspect Dashboard and Cases. Open Policy Intelligence and ingest **Demo Notice A — Drug A Exclusion**. Inspect the exact evidence and verify insurer, plan, type, code, effect and effective date. The UI shows whether Gemini or deterministic extraction was used.
-3. Preview impact: the three applicable November Drug A claims change, while the earlier service remains covered by its baseline rule. Approve the proposal and inspect Cases, Updates and alerts (`GET /api/alerts`), plus `GET /api/audit`.
-4. Ingest **Demo Notice B — Delayed Exclusion** and approve the December effective date. November exclusion alerts close. A claim with a separate missing prior authorization remains flagged; the automated PDF delay regression demonstrates this explicitly.
-5. Click **Check Source Now** for CMS. Show the actual source status, meaningful fingerprint, timestamps and pending review. With a working model, extracted source proposals still need human review. With no key, conservative text extraction can stage an incomplete proposal for clarification. With a configured but failing model, the source reports `extraction_failed` and remains retryable. Repeat a successful check to show `unchanged` and no duplicate.
-6. Turn demo mode off and clear claims via `DELETE /api/cases`. Preview reports zero analyzed claims. Policy versions and audit evidence remain available.
+```bash
+PYTHONPATH=backend backend/.venv/bin/python backend/tests/verify_sources_live.py
+```
 
-The connector currently monitors one configured CMS NCD page. Database-wide policy discovery, jurisdiction-aware Medicare adjudication, insurer credentials, and commercial payer feeds are outside the verified implementation.
+Public policy text remains a candidate until exact applicability, complex conditions, evidence and effective dates are sufficiently verified by a reviewer. Unknown scope never becomes an all-plan wildcard. CoverageGuard does not approve, deny, submit or alter patient claims.

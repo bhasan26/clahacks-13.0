@@ -85,6 +85,7 @@ export interface PolicyBulletin {
 }
 
 export interface IntakeAnalysisResult {
+  policy_environment?: string;
   success: boolean;
   card: {
     insurer_name: string;
@@ -307,6 +308,13 @@ export type ReviewStateType = 'pending_review' | 'approved' | 'rejected' | 'need
 export type PolicyChangeType = 'new_rule' | 'modification' | 'delayed' | 'cancelled';
 
 export interface ProposedPolicyChange {
+  requires_billing_articles?: boolean;
+  billing_articles_verified?: boolean;
+  jurisdictions?: string[];
+  code_system?: string | null;
+  scope_verified?: boolean;
+  extraction_method?: string;
+
   evidence_verified?: boolean;
   evidence_confirmed_by_reviewer?: boolean;
   proposal_id: string;

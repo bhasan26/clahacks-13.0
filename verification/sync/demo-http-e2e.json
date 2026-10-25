@@ -1,0 +1,36 @@
+{
+  "transport": "real HTTP",
+  "simulation": true,
+  "external_ai_used": false,
+  "steps": [
+    {
+      "step": "import_independent_hospital",
+      "claims": 40,
+      "before_policies": "unable_to_verify"
+    },
+    {
+      "step": "sync_and_review_baseline",
+      "policies": 5,
+      "H-003": "Known coverage exclusion or unmet requirement"
+    },
+    {
+      "step": "upload_additional_synthetic_claim",
+      "claim_id": "C-3B8A06FF10AE",
+      "finding": "No issue detected under SIMULATED checked rules"
+    },
+    {
+      "step": "restriction_detected_reviewed",
+      "version": 2,
+      "affected_claims": 9,
+      "other_insurer_unchanged": true
+    },
+    {
+      "step": "delay_reviewed",
+      "version": 3,
+      "unrelated_authorization_retained": true,
+      "resolved_alerts_closed": true,
+      "repeat_sync_unchanged": 5
+    }
+  ],
+  "audit_events": 94
+}

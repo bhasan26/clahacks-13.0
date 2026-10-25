@@ -1,121 +1,127 @@
-# CoverageGuard final engineering audit
+# CoverageGuard — hospital findings and insurer policy synchronization
 
-Audit date: October 24, 2026 (America/Los_Angeles). Baseline: `d25cead`. Review branch: `codex/coverageguard-reliability`; main is not modified. `origin/main` was fetched at the start and again before review preparation and remained at the baseline.
+Implementation branch: `codex/insurer-policy-sync`. Base: merged reliability audit `d0948f0c4d2f0b32c38f3d926899b5c201a8a2d0`. Verification: October 24, 2026 Pacific / October 25 UTC. This report replaces the earlier audit's current-status description; that audit remains in Git history.
 
-The implementation preserves the FastAPI/React architecture, existing pages, deterministic evaluation engine and explicit synthetic presets. The final workflow is verified with repeatable deterministic and mocked tests. Public CMS retrieval/staging is verified live with explicitly disabled AI. Live Gemini generation did not succeed and is not claimed as verified.
+## Result and architecture
 
-## Findings and fixes
+Both requested hospital workflows are implemented on the existing application. A hospital employee can import forty claims from an independent service or add a synthetic claim, see exact insurer/plan/state/code/date findings, inspect evidence and request a targeted refresh. The backend independently discovers and synchronizes policy metadata, stages changed representations, preserves evidence/version history, and re-evaluates claims after human approval. Nothing submits, denies, edits or guarantees payment for a patient claim.
 
-| Finding | Fix and evidence |
+```
+Independent Hospital API ── read-only import ──> local claims
+                                                │
+Official sources / Independent Insurer API       │ exact local matching
+         │                                      ▼
+read-only connector → metadata catalog → bounded relevant fetch
+         → content fingerprint → extraction / evidence → human review
+         → approved versioned rules → deterministic full-claim evaluation
+         → findings + affected claims + reconciled alerts + audit history
+```
+
+The existing document processing, policy extraction, validation, rule builder, diff/preview, approval, deterministic evaluator, alerts and frontend design were reused. The old demo API and CMS page-monitor API remain for compatibility; the main UI/scheduler use the new multi-source workflow. No old tests were deleted. Baseline before implementation: 117 tests and the frontend build passed.
+
+## Connectors and safe discovery
+
+`policy_base.py` defines policy-only queries, download records and discovery/fetch behavior. `registry.py` registers explicit source identities. Commercial adapters share `commercial.py`; CMS and the synthetic API have separate adapters.
+
+- UHC: actual commercial medical/drug index and PDF links. Authorization gate runs before discovery **and** fetch.
+- Aetna: follows the landing page's actual published XML index (`data-xmlfile`), deduplicates CPBs and fetches HTML. No invented search API. Authorization gate runs before any request.
+- Anthem California: `bcbs-anthem-ca` only; source identity cannot be selected by generic `bcbs`. HTML directory is discoverable; blocked PDFs are reported as restricted.
+- CMS: endpoints verified against the publisher's OpenAPI at `https://api.coverage.cms.gov/docs/v1/coverage-api.json`, linked by its Swagger client. NCD and final LCD reports provide discovery; detail URLs use documented identifiers/versions. Only explicit same-host next URLs are followed where report token parameters are undocumented. Documented related-document and primary-jurisdiction endpoints support bounded pagination. LCD metadata retains associated billing article references and MAC/state information when accessible. Activation requires explicit billing-article and jurisdiction review; neither is inferred from a national index.
+- Demo: reads fixed loopback `/policies` and `/policies/{id}` from an independently persisted service. It does not read CoverageGuard's rule store. Structured synthetic scope is validated against catalog identity before staging, and still requires human approval.
+
+Caseload queries remain local. They include only insurer/plan/environment, code, medical topic and jurisdiction. Outbound catalog requests do not receive patient names, member references, diagnoses, clinical documents or claim records. Discovery matches metadata before fetching documents. Missing code metadata may select topic candidates but cannot establish applicability. Default five documents per source/run, maximum twenty; unprocessed/retry candidates take precedence to avoid starvation. Catalog metadata is searchable across the complete store before the 500-result response limit, including insurer, plan and jurisdiction.
+
+`policy_http.py` enforces approved HTTPS hosts, no URL credentials, each redirect hop, explicit-port restrictions, bounded streaming (10 MB), 20-second request/10-second connection timeouts, three temporary-failure attempts with backoff, long Retry-After deferral, throttling and five-minute metadata caching. Authorization headers are removed on cross-host redirects. Robots matching supports user-agent specificity, longest matching paths, wildcard and end anchors. The documented CMS programmatic API is treated as an API rather than a crawler; this grants no authentication bypass. Error reports exclude raw provider responses and credentials. Simulator URLs must be fixed `127.0.0.1` HTTP origins with explicit ports and no paths/queries/credentials.
+
+Publisher permission is distinct from technical reachability. After researching the terms, UHC and Aetna automated connectors were disabled by default. An operator may supply an authorization reference **after** obtaining the publisher's permission. References do not override robots/authentication or establish plan scope. Existing persisted source cards refresh these restrictions on startup/API reads; a new authorization reference changes status to unchecked, never connected.
+
+## Actual official-source verification
+
+Final gate-respecting execution is recorded in [live-sources.json](verification/sync/live-sources.json). Earlier technical observations are preserved separately in [technical-source-observations.json](verification/sync/technical-source-observations.json), explicitly marked as preceding the terms restriction. They do not establish authorized ongoing access.
+
+| Insurer/source and URL | Type | Discovery | Document retrieval | Usable verified rules | Exact plan/jurisdiction | Complete claim check |
+| --- | --- | --- | --- | --- | --- | --- |
+| [UHC](https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html) | HTML / PDF | Final run: authorization required. Earlier technical observation: 250 entries. | Final run: disabled. Earlier relevant knee PDF returned text, bounded to ten pages. | No | No | No |
+| [Aetna](https://www.aetna.com/health-care-professionals/clinical-policy-bulletins/medical-clinical-policy-bulletins.html) | Published XML / HTML | Final run: authorization required. Earlier technical observation: 920 deduplicated entries. | Final run: disabled. Earlier CPB 0673 HTML returned text. | No | No | No |
+| [Anthem CA](https://www.anthem.com/ca/provider/policies/clinical-guidelines/?cnslocale=en_US_ca) | Regional HTML / PDF | Live: 98 directory entries. | Sample PDF blocked by robots. No bypass. | No | Affiliate CA known; exact plan unverified. | No |
+| [CMS](https://api.coverage.cms.gov/docs/) | Documented JSON API | Live: 1,301 NCD/LCD metadata entries. | NCD 285 v1: 5,018 text characters. Sample LCD detail/metadata: HTTP 401 without token. | No approved clinical rule; text retrieval only. | No complete code/plan/MAC/article evidence verified. | No |
+
+UHC's [terms PDF](https://www.uhc.com/content/dam/uhcdotcom/en/npp/TOU-UHCPROVIDER-COM-EN.pdf) restrict harvesting. Aetna's [digital terms](https://www.aetna.com/legal-notices/digital-terms-of-use.html), Unauthorized Conduct, require express prior written consent for automated indexing and systematic downloading. The Anthem [robots policy](https://www.anthem.com/robots.txt) blocks the attempted PDF retrieval. CMS licensed endpoints require an operator-supplied token/appropriate rights; no license acceptance was performed.
+
+This independently demonstrates real official CMS discovery/detail connectivity and partial regional directory connectivity. It does **not** demonstrate synchronized commercial member benefits, complete Medicare adjudication or an insurer partnership. Catalog counts are observations at the recorded time, not coverage completeness metrics.
+
+## Sync lifecycle, versions and persistence
+
+A global non-overlap lock prevents concurrent syncs. The scheduler is opt-in (`COVERAGEGUARD_SCHEDULER_ENABLED=true`), defaults to 86,400 seconds, and runs server-side. `COVERAGEGUARD_SCHEDULER_SOURCES` can restrict it to the demo source. Frontend five-second polling merely refreshes displayed data. The POSIX process lock enforces a single API worker.
+
+Each source records attempted/successful/next timestamps, health and limitations, consecutive failures and discovered/fetched/changed/unchanged/pending/failed counts. Each persisted run has gaps, errors and completion state. Restart loading marks interrupted runs; persisted due times resume. Temporary failures retry with bounded exponential scheduling; authorization-required sources defer to the normal interval. Manual and targeted refresh use the same engine.
+
+Metadata revision, document reference, downloaded fingerprint and successfully processed fingerprint are separate. Formatting-normalized text avoids irrelevant HTML layout duplicates; structured demo fingerprints compare rule semantics rather than quotes/version labels. Truncated PDFs additionally retain a download hash so changes outside processed pages cannot silently appear unchanged. This normalization is conservative text comparison, not a general semantic equivalence solver: materially rewritten prose can require another review.
+
+Failed extraction keeps the parsed document and structured source for safe retry. The successful fingerprint advances only with successful staging. Staging proposals, extracted documents, immutable versions and counters is committed transactionally; controlled checkpoint failure rolls back in-memory changes and keeps the retry document. A generation check prevents a reset during fetch/extraction from resurrecting old state. Missing index entries become `not_in_latest_index`, never automatic cancellation. A stale/superseded extracted document cannot be approved against a newer catalog revision/document reference.
+
+`persistence.py` introduces SQLite `records(kind,id,insurer_id,policy_id,version,payload)` with a composite identity/version index. Existing domain objects remain the unit of work; the entire snapshot is one transaction. Claims, rules/history, catalog, documents/versions, proposals, source state/runs, alerts and audit records survive restart. The default is `backend/data/coverageguard.sqlite3`, mode 0600. A legacy sibling JSON snapshot is imported only when the default SQLite file is absent, leaving the JSON untouched. Explicit `.json` paths retain prior behavior for compatibility; empty path disables persistence. Corrupt state fails startup rather than silently resetting.
+
+This remains an in-memory single-worker application with SQLite checkpoints, not a normalized multi-tenant query service, encrypted clinical database, distributed scheduler or tamper-proof audit log.
+
+## Findings, approval and privacy
+
+Rules now carry jurisdiction, code system, verified scope, verification status, catalog/revision/sync provenance and LCD/article review flags. Matching requires exact insurer/affiliate, plan (or explicitly verified wildcard), region, item type, code/system and service date. Publication/revision dates are separate from effective dates. Empty plans, unknown scope, unsupported conditions and absent rules remain unknown. Official-environment claims cannot use synthetic rules. Public connector extraction always stages unverified scope for correction, even when the model returns plausible data.
+
+The hospital findings endpoint evaluates approved current evidence; source documents older than 48 hours or known failed/absent from an index are omitted with a gap. Findings include reference/version, effective date, source URL/quotation, required documents, authorization needs and follow-up. Missing member reference or items produces unable-to-verify. These results are advisory and distinguish simulated evidence. The old engine's internal `Approved` compatibility status is displayed as “No checked issue”; it is not a patient/insurer approval.
+
+Approval reuses source validation, scope confirmation, immutable version history, deterministic preview, complete-claim re-evaluation and alert reconciliation. Version 2 restriction affects exact matching November claims; version 3 delay closes only resolved item alerts. Unrelated authorization issues remain. Alert quotations are now looked up only when an actual governing rule exists; a missing-rule alert cannot borrow an unrelated pending proposal's evidence.
+
+Clinical intake is **local only**. The clinical Gemini call is disabled regardless of configured key. Selectable PDF/text can use local extraction; image/scanned OCR is not implemented and requires manual structured entry. Public/synthetic policy documents can use optional server-side Gemini, with conservative deterministic fallback if no key exists. Live Gemini generation is still unverified: the earlier audit observed 404/429/timeouts. No new success is claimed.
+
+Synthetic-data attestation remains required on patient import/upload routes. Local mutation/origin checks and optional reviewer token remain; credentials stay server-side. This is not production authentication. No PHI detection, certified de-identification, HIPAA compliance or real hospital integration is claimed.
+
+## API and UI
+
+New routes under `/api`:
+
+- `GET /policy-sync/sources`, `GET /policy-sync/history`, `POST /policy-sync/run` (optional source/claim/catalog targeting).
+- `GET /policies/catalog` (insurer/query filtering), `GET /policies/catalog/{id}/versions`.
+- `POST /claims/import`, `GET /claims/findings`, `GET /claims/{id}/findings`.
+- `GET /workflow/summary`, `POST /demo/import-hospital`, `POST /demo/publish-insurer`.
+
+Existing clinical/file upload, cases, policy proposal correction/preview/approval, audit, alerts and version routes remain. The demo publication proxy is an explicit local synthetic admin action; real source connectors only read.
+
+Navigation now emphasizes Dashboard, Claims, Policy Monitoring, Alerts and supporting Policy Review. Existing colors/layout are preserved. Claims supports structured entry/JSON upload, existing clinical/card intake, exact insurer/plan/region and explicit demo-environment choice, insurer/status/specialty filters, source evidence and targeted refresh. Monitoring shows actual source access state, timestamps, schedule/counters/limitations, catalog search, runs and pending review. Dashboard, alerts and case metadata refresh to show backend changes without owning synchronization. Alerts show insurer, claim, policy/version, effective date, evidence and follow-up. Policy Review retains source inspection/correction and adds scope/jurisdiction/code-system/article confirmation. Static fake insurer connectivity was replaced with a link to real source status.
+
+## Verification and evidence
+
+| Check | Actual result |
 | --- | --- |
-| HTML support was a regex strip, including navigation; removing the CMS form would remove the policy itself | BeautifulSoup parsing retains form contents, removes controls/chrome/scripts, and selects the actual NCD title, tracking and description panels. Live NCD 90.2 extraction returns 5,265 policy-text characters. Relevant headings/source URLs survive. |
-| Downloaded hash committed before extraction, losing failed revisions | A raw byte hash is recorded separately. Normalized policy-text hash advances only after proposals, diffs and preview are successfully computed and staged. Configured AI failure leaves the source retryable. Regression verifies download success → extraction failure → retry success → exactly one proposal. |
-| Navigation changes could announce policy revisions | SHA-256 covers normalized selected policy text, with raw-byte SHA-256 retained independently. Navigation/footer changes do not stage duplicates; a controlled genuine policy revision does. |
-| Arbitrary URLs and redirect destinations could be fetched | HTTPS CMS host/port allowlist is checked before every hop and followed PDF link. HTTP failures, redirects, timeouts, unsupported types, empty/oversize files are handled. Official landing-page PDF delegation uses the existing PDF pipeline. |
-| Missing insurer/plan became wildcard; checker used fuzzy payer/code/name matching | One exact matcher across evaluation/diff/preview/approval. Unrecognized identities remain distinct; empty/unknown claim plans never satisfy wildcard. Plans must have an explicitly stated scope. Item type and standardized code are exact. Similar codes and shared codes across insurers/plans are tested. |
-| Preview and approval could version a different payer/plan/type rule | Shared pure proposal-to-rule builder. Scope must match for versioning; ambiguous references require clarification. New scoped rules cannot overwrite a different scope. Generated rule IDs are stable between preview and approval. |
-| Extraction, intake and UI substituted synthetic dates, drugs, plans, payers, authorization and effects | Unknowns remain null/empty. Unfamiliar text uses a conservative parser rather than sample lookup. Explicit sample presets are retained. The UI provides editable insurer/plan/type and an unknown effect option. |
-| A real supporting quote could accompany fabricated structured fields | Selectable-text validation independently checks payer aliases, exact codes/plans, date representations, wildcard statements and quoted effects. Unsupported values are cleared and approval is blocked. Visual evidence remains unverified until a reviewer confirms it with notes. These checks are conservative and do not replace semantic human review. |
-| Preview overcounted items, counted pre-existing risks, and could affect unrelated claims | Whole-claim before/after evaluation through the same deterministic engine; unique affected/new-risk case counts; only changed applicable item verdicts included. No preview writes or inserted claims with demo disabled. |
-| Historical rules were mutated to superseded; delay/cancellation could erase other problems | Previous versions remain unchanged. Explicit delay/cancellation revision chains and service dates determine active rules. `as_of` restores prior knowledge snapshots. Entire claims and item alerts are reconciled. A separate missing authorization survives a delayed drug exclusion. |
-| Alert analyzer filtered for impossible case status `open` and referenced nonexistent verdict fields | Rebuilt reconciliation against the existing `CaseCheckResult` / `ItemVerdict` schema. New, superseded and closed alerts retain actual evidence, date and actions. No fabricated guaranteed rejection or treatment-switch recommendations. |
-| Duplicate approvals and partial failures could corrupt workflow | Serialized, idempotent approval; copied/validated edits; transaction rollback on processing failure. Rejected proposals cannot be activated; approved proposals cannot be retroactively rejected. |
-| Scheduler thread guard did not prevent multiple API processes | Explicit one-worker application with POSIX process lock; opt-in scheduler in lifespan; per-source locks for scheduler/manual checks; bounded provider requests and stop handling. Another API worker is rejected. Interrupted processing remains retryable on restart. |
-| All state vanished on restart | Atomic local 0600 JSON checkpoints retain synthetic claims, rules/versions, proposals/documents, alerts, audit and source history. Tests restore successful approval and interrupted-source state. Clear-claims retains policy history and closes orphan alerts. |
-| Source fixtures and initial connection state could look like real monitoring | Unchecked sources start `active`, not `connected`. Scheduler status is visible; test overrides require explicit configuration and are marked simulated. They cannot establish the API's real-connection flag. CMS staged documents can be opened in the review UI. |
-| Public mutation endpoints, wildcard CORS, oversized/invalid uploads and provider logging | Loopback/token mutation authorization, configured origins, synthetic-data acknowledgement for uploads, bounded request/file/image handling, header-based Gemini credentials and sanitized errors. Provider response bodies and request URLs with keys are not logged. |
-| Policy bulletin substring lookup could show another policy's citation | Exact bulletin identity lookup; a regression rejects `R-1` as a match for `R-1042`. |
-| Seeded commercial payer criteria looked authoritative | Seeded rules/bulletins explicitly identify synthetic examples; docs/UI distinguish public CMS retrieval from commercial insurer APIs. |
+| Baseline full pytest | 117 passed before changes |
+| Final full pytest | **157 passed**, six third-party deprecation warnings |
+| Existing acceptance runner | **38 passed, zero failed** |
+| Frontend | TypeScript and Vite production build passed |
+| Independent services over real HTTP | 40 imports, five approved baseline representations, extra UHC upload, nine affected restriction claims, delay resolution, preserved J1234 authorization, five unchanged on repeat, 94 audit events |
+| Actual backend schedule over real HTTP | Two-second demo interval, **zero manual sync calls**, baseline/restriction/delay discovered automatically; human approval remains explicit |
+| Official sources | Gate-respecting live matrix above; no verified commercial or CMS member-specific check |
+| Native Chrome smoke | Dashboard, Claims, Policy Monitoring, Alerts and supporting Policy Review inspected on isolated production preview; an unfamiliar official UHC plan returned unable-to-verify with no demo fallback |
 
-## Verification actually executed
+New tests cover exact UHC/Aetna/affiliate/Medicare isolation, wrong plan/region/code/system, unknown insurer, stale/missing scope, required authorization/documents, synthetic/official separation, read-only/privacy boundaries, safe hosts/redirects/size/robots, publisher gates before requests, source retries, extraction retry retention, checkpoint rollback, restart persistence, duplicates/races, metadata search beyond 500 rows, approval gating, exact restriction/delay impact and evidence attribution. Old tests remain; one scheduler test was adapted to the new sync entry point.
 
-Environment: Python 3.12.10, Node v25.9.0, npm 11.12.1. Backend dependencies installed into the root repo's isolated `backend/.venv`; frontend installed using `npm ci` and the existing lockfile.
+Scripts and recorded artifacts:
 
-| Command / workflow | Result |
-| --- | --- |
-| Baseline pytest before edits | 49 passed |
-| Baseline frontend `npm run build` | Passed TypeScript and production build |
-| Final `backend/.venv/bin/python -m pytest backend/tests -q` | **117 passed**, six third-party FastAPI TestClient / PyMuPDF deprecation warnings |
-| `backend/.venv/bin/python backend/tests/qa_e2e_runner.py` | **38 passed**, zero failed |
-| `npm run build --prefix frontend` | Passed TypeScript and Vite production build; 37 modules transformed |
-| API response inspection | Health, dashboard, cases, connection, sources and audit returned HTTP 200 with expected contracts |
-| Unfamiliar synthetic PDF | Upload → text extraction → grounded fields/quote → preview → human approval → stored v2 → claim risk → explainable alert → audit passed with deterministic extraction |
-| Separate exclusion and delay PDFs | Exclusion creates risk, separate uploaded delay moves the date, resolved alert closes, unrelated prior authorization stays open |
-| Concurrent approvals and source checks | One rule version/approval event and one source proposal; no duplicates |
-| Failure injection | Failed extraction is retried; failed approval rolls back; a reset during extraction does not resurrect old proposals |
-| Empty caseload | Demo disabled, claims cleared, zero analyzed claims, no silent demo generation |
-| Native Chrome against isolated production preview | Dashboard, Cases, Updates and Policy Intelligence rendered. Verified 40-claim demo → extracted quotation/fields → preview of 3 affected/new-risk claims → approval of 3 claims → Updated policy and Action Center queue for C-001/C-005/C-008. Final ID-stability regression was added after the browser exposed changing generated IDs. |
-| Live CMS with deterministic extraction explicitly selected | HTTP 200; NCD 90.2 / Next Generation Sequencing; 5,265 extracted characters; stable meaningful hash; one incomplete proposal staged; next actual network check `unchanged`; zero duplicate proposals; zero unapproved rules applied |
-| Controlled CMS revision fixture | Navigation change unchanged; genuine text/date change stages another review; rules remain untouched |
-| Mocked Gemini | Successful multi-proposal JSON/evidence mapping and HTTP failure/fallback/key handling passed |
-| Live Gemini | **Not verified**. Model catalog HTTP 200; `gemini-2.5-flash` generation HTTP 404; `gemini-3-flash-preview` HTTP 429; `gemini-3.8-flash` read timeout, including a 60-second extraction attempt. Never counted fallback as live success. |
+- `backend/tests/run_sync_demo_e2e.py` → [demo-http-e2e.json](verification/sync/demo-http-e2e.json).
+- `backend/tests/run_scheduled_demo_e2e.py` → [scheduled-http-e2e.json](verification/sync/scheduled-http-e2e.json).
+- `backend/tests/verify_sources_live.py` → [live-sources.json](verification/sync/live-sources.json).
+- `scripts/run_demo.sh` starts the four local processes. [README.md](README.md) gives commands, exact scenario and expected counts. HTTP demo scripts reset only the selected synthetic workspace; use an isolated instance.
 
-Live artifacts: [CMS deterministic verification](verification/live-cms-deterministic.json) and [Gemini attempt](verification/live-gemini-attempt.json). They contain public-source metadata and synthetic test values, no API keys or patient information. The separately verified CMS staging flow deliberately used deterministic extraction; the configured-but-failing AI run correctly stayed `extraction_failed` and did not commit a processed hash.
+## Changed implementation files
 
-No actual CMS policy revision was induced on the government site. Revision detection was exercised using a controlled fixture. The live NCD has no complete standardized target/plan mapping from the conservative parser, so its staged proposal needs clarification and cannot be applied. Linked-PDF handling was tested with controlled HTTP responses, not an observed live linked CMS PDF.
+New backend modules: `connectors/{policy_base,policy_http,commercial,cms_connector,simulated,registry,sync_engine}.py`, `db/persistence.py`, `domain/sync_models.py`, `engine/findings.py`, `sync_api.py`, independent `simulators/{common,hospital,insurer}.py`. Modified existing `connectors/scheduler.py`, `db/store.py`, `domain/models.py`, `engine/{checker,matcher}.py`, `impact/analyzer.py`, `intake/analyzer.py`, `intelligence/{policy_extractor,rule_builder}.py`, `main.py` and `.env.example`.
 
-Existing tests were retained. Fixture corrections supplied explicit plan/insurer/evidence where the prior assertions relied on unsafe defaults; the old assertion that a future rule alone proved current coverage was replaced by an explicit affirmative baseline. Plan-specific approval expectations now require a separate scoped rule rather than silently versioning an all-plan baseline. Source-status assertions reflect the new retry/review states. New negative tests protect each corrected assumption.
+Frontend: new `ClaimsWorkspace.tsx`, `PolicyMonitoring.tsx`, `WorkflowOverview.tsx`; updated App routing/polling, API/types, Sidebar, PolicyIntelligence, DashboardPage, CasesPage, CaseDetailModal and UploadPatientFileModal. Test additions: policy-sync regressions plus three opt-in HTTP/live scripts; existing external connector scheduler test updated. Documentation, demo launcher and four small verification JSON artifacts are included. Runtime databases, credentials, generated frontend output, nested unrelated checkout and local `plan.md` are excluded.
 
-## Remaining limitations
+## Remaining gaps
 
-1. Live Gemini generation remains blocked by the observed service/model/quota/timeouts. Obtain working model access and rerun `backend/tests/live_verify.py` before claiming successful live AI integration. `GEMINI_MODEL` is configurable; the current stable model identifier was checked against [Google's official model documentation](https://ai.google.dev/gemini-api/docs/models).
-2. The CMS connector monitors one configured public NCD page. It does not discover the entire database, implement Medicare jurisdiction/benefit logic, or connect to commercial insurer accounts. HTML layout changes may require selector maintenance.
-3. Conservative text extraction cannot interpret every policy, billing code standard, condition or date format. Visual/complex evidence requires human correction. Code presence in a document does not prove that all clinical criteria were understood correctly.
-4. The engine implements this prototype's existing coverage/prior-approval/document model. It is not a validated clinical, coding, benefits or payment determination system. Conflicting/unknown rules require verification rather than presumed coverage.
-5. Synthetic-only acknowledgement, partial regex redaction and loopback/shared-token review are practical prototype boundaries, not full privacy controls or role-based access. Images are not de-identified. Do not submit real patient data or expose the prototype publicly for that use.
-6. The checkpoint is local, unencrypted, single-process and not tamper-proof. It is appropriate for synthetic demonstration state, not multi-server production storage. POSIX `flock` requires macOS/Linux. Do not run multiple workers or independent servers against the same checkpoint with different lock paths.
-7. Uploaded files are limited to 10 MB and images to 20 megapixels. PDF extraction covers at most ten pages; vision sends at most five scanned page images. Review truncation warnings and omitted pages manually.
-8. This is a manual browser smoke test, not a committed automated browser suite or exhaustive browser/accessibility certification. Tests use synthetic fixtures; no real patient or insurer transaction was performed.
-
-## Compatibility changes to review
-
-Existing routes and response structure remain where practical, with additive source/evidence/extraction metadata. Intentional safety changes: upload requests require `X-Synthetic-Data: true`; configured reviewer tokens apply to mutations; invalid/incomplete approvals return 422 instead of incorrectly returning 404; missing intake fields no longer produce fabricated samples; unknown service dates can be null; claim clearing retains policy history; source states now distinguish retry failures and pending review. The frontend is updated for these changes. API consumers should adopt the same requirements.
-
-## Local run and CalHacks sequence
-
-[README.md](README.md#run-locally) provides dependency installation, environment setup, one-worker startup, optional scheduler/token configuration and test commands. [The CalHacks demonstration sequence](README.md#calhacks-demonstration) explicitly seeds 40 synthetic claims, ingests exclusion and delay notices, previews and approves changes, inspects alerts/audit, checks CMS twice, and demonstrates the empty caseload. Explain the extraction mode aloud; do not advertise a fallback demonstration as a live Gemini call.
-
-## Exact files modified or added
-
-- `.gitignore`
-- `ENGINEERING_REPORT.md`
-- `PROGRESS.md`
-- `README.md`
-- `backend/.env.example`
-- `backend/app/connectors/base.py`
-- `backend/app/connectors/change_detector.py`
-- `backend/app/connectors/official_policy_source.py`
-- `backend/app/connectors/scheduler.py`
-- `backend/app/db/store.py`
-- `backend/app/domain/models.py`
-- `backend/app/engine/checker.py`
-- `backend/app/engine/matcher.py`
-- `backend/app/impact/analyzer.py`
-- `backend/app/intake/analyzer.py`
-- `backend/app/intelligence/document_processor.py`
-- `backend/app/intelligence/evidence_validator.py`
-- `backend/app/intelligence/impact_previewer.py`
-- `backend/app/intelligence/policy_diff.py`
-- `backend/app/intelligence/policy_extractor.py`
-- `backend/app/intelligence/rule_builder.py`
-- `backend/app/main.py`
-- `backend/requirements.txt`
-- `backend/tests/conftest.py`
-- `backend/tests/live_verify.py`
-- `backend/tests/qa_e2e_runner.py`
-- `backend/tests/test_action_center.py`
-- `backend/tests/test_api.py`
-- `backend/tests/test_external_connector.py`
-- `backend/tests/test_fixes.py`
-- `backend/tests/test_policy_intelligence.py`
-- `backend/tests/test_reliability.py`
-- `frontend/src/api.ts`
-- `frontend/src/components/PolicyIntelligence.tsx`
-- `frontend/src/components/UpdatesPage.tsx`
-- `frontend/src/components/UploadPatientFileModal.tsx`
-- `frontend/src/types.ts`
-- `frontend/vite.config.ts`
-- `verification/live-cms-deterministic.json`
-- `verification/live-gemini-attempt.json`
-
-The untracked nested `clahacks-13.0/` repo and `plan.md` were preserved and are not part of this change. No credentials, runtime checkpoints or generated frontend bundles are committed.
+- Actual commercial automation requires publisher permission; exact member benefits/plan applicability are unavailable. No commercial end-to-end claim verification is claimed.
+- Anthem PDF robots restrictions prevent that sample document ingestion. CMS LCD detail/related access requires appropriate license token; actual MAC/article applicability remains unverified.
+- Public medical policy language can contain complex clinical criteria beyond the deterministic schema. Reviewers must not approve an incomplete representation as fully authoritative. Public source text and metadata are candidates only.
+- Daily document budgets and partial metadata can leave gaps; they are visible. The database is not an exhaustive insurer coverage mirror. Text normalization does not prove semantic equivalence of arbitrary prose.
+- No clinical OCR/external clinical AI. Manual structured entry is required when local text extraction fails. No new live Gemini generation success.
+- Single API worker, local synthetic records, coarse snapshot persistence, no distributed scheduling/roles/encrypted PHI storage or production-readiness claim.

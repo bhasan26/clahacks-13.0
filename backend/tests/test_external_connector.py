@@ -292,6 +292,7 @@ def test_scheduler_thread_safety_no_duplicates(monkeypatch):
     """Scheduler must not start duplicate threads if already running."""
     import app.connectors.scheduler as sched
     monkeypatch.setattr("app.connectors.change_detector.check_source_for_changes", lambda source: None)
+    monkeypatch.setattr("app.connectors.sync_engine.sync_policies", lambda source: None)
 
     # Start once
     start_source_scheduler(interval_seconds=3600)

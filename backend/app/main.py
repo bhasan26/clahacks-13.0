@@ -75,8 +75,10 @@ async def lifespan(app):
     acquire_worker_lock()
     try:
         store.load_checkpoint()
+        from app.connectors.registry import ensure_sources
+        ensure_sources(store)
         if os.environ.get("COVERAGEGUARD_SCHEDULER_ENABLED", "false").lower() == "true":
-            start_source_scheduler(int(os.environ.get("COVERAGEGUARD_CHECK_INTERVAL", "3600")))
+            start_source_scheduler(int(os.environ.get("COVERAGEGUARD_CHECK_INTERVAL", "86400")))
         yield
     finally:
         stop_source_scheduler()
@@ -112,7 +114,7 @@ async def local_synthetic_boundary(request: Request, call_next):
             return JSONResponse({"detail": "Origin is not allowed."}, status_code=403)
         if (expected and not secrets.compare_digest(expected, supplied)) or (not expected and peer not in {"127.0.0.1", "::1", "testclient"}):
             return JSONResponse({"detail": "Reviewer authorization required."}, status_code=403)
-        if request.url.path in {"/api/policies/extract", "/api/intake/analyze", "/api/cases/upload"} and request.headers.get("x-synthetic-data") != "true":
+        if request.url.path in {"/api/policies/extract", "/api/intake/analyze", "/api/cases/upload", "/api/claims/import", "/api/demo/import-hospital"} and request.headers.get("x-synthetic-data") != "true":
             return JSONResponse({"detail": "Synthetic data only. Confirm with X-Synthetic-Data: true."}, status_code=400)
         # Bound actual bytes, including chunked/base64 and multipart requests.
         limit = 14 * 1024 * 1024
@@ -212,7 +214,9 @@ def list_cases(
             "status": c.status,
             "items_count": len(c.items),
             "member_ref": c.member_ref,
-            "service_date": c.service_date.isoformat(),
+            "service_date": c.service_date.isoformat() if c.service_date else None,
+            "insurer_id": c.insurer_id, "insurer_name": c.insurer_name, "plan_id": c.plan_id,
+            "jurisdiction": c.jurisdiction, "policy_environment": c.policy_environment,
             "items": [it.model_dump() for it in c.items],
             "prior_approval_ref": c.prior_approval_ref,
         }
@@ -366,7 +370,7 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
     if not sdate:
         clinical_data.setdefault("validation_warnings", []).append("Missing service date; coverage cannot be assessed.")
     provisional_case = Case(
-        case_id="PROVISIONAL",
+        case_id="PROVISIONAL", policy_environment="demo" if payload.sample_id else "official",
         insurer_id=card_data.get("insurer_id") or "",
         insurer_name=card_data.get("insurer_name"),
         plan_id=card_data.get("plan_id") or "",
@@ -394,6 +398,8 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
 
     return {
         "success": True,
+        "policy_environment": "demo" if payload.sample_id else "official",
+        "privacy_notice": "Clinical documents are processed locally; no clinical files or identifiers are sent to external AI or insurer sources.",
         "card": card_data,
         "clinical": clinical_data,
         "check_result": eval_result,
@@ -405,7 +411,10 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
 # File Upload: Save Case to Caseload
 # ---------------------------------------------------------
 class UploadCasePayload(BaseModel):
-    specialty: str = "Cardiology"
+    jurisdiction: Optional[str] = None
+    code_system: Optional[str] = None
+    policy_environment: Literal["official", "demo"] = "official"
+    specialty: str = "Unspecified"
     patient_text: Optional[str] = ""
     prescription_text: Optional[str] = None
     insurer_id: Optional[str] = None
@@ -441,7 +450,7 @@ def upload_patient_file(payload: UploadCasePayload):
     dx_code, dx_desc, docs = payload.diagnosis_code, payload.diagnosis_desc, payload.documents or []
 
     new_case = Case(
-        case_id=new_id,
+        case_id=new_id, jurisdiction=payload.jurisdiction, policy_environment=payload.policy_environment,
         insurer_id=ins_id,
         insurer_name=ins_name,
         plan_id=p_id,
@@ -451,7 +460,7 @@ def upload_patient_file(payload: UploadCasePayload):
         service_date=sdate,
         visit_type="outpatient",
         diagnoses=[Diagnosis(code=dx_code, description=dx_desc)] if dx_code else [],
-        items=[CaseItem(type=itype, code=icode, name=iname, quantity=1)],
+        items=[CaseItem(type=itype, code=icode, name=iname, quantity=1, code_system=payload.code_system)],
         documents=docs,
         prior_approval_ref=payload.prior_approval_ref,
         status="Approved",
@@ -893,3 +902,7 @@ def set_demo_mode_endpoint(payload: DemoModePayload):
     return {"success": True, "demo_mode": store.demo_mode}
 
 
+
+
+from app.sync_api import router as workflow_router
+app.include_router(workflow_router)

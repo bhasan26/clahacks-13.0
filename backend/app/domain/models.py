@@ -41,12 +41,21 @@ class RuleStatus(str, Enum):
 
 
 class Target(BaseModel):
+    code_system: Optional[str] = None
     type: str  # "drug" | "procedure" | "service"
     code: str
     name: Optional[str] = None
 
 
 class Rule(BaseModel):
+    requires_billing_articles: bool = False
+    billing_articles_verified: bool = False
+    jurisdictions: List[str] = Field(default_factory=list)
+    scope_verified: bool = True
+    verification_status: str = "approved"
+    catalog_id: Optional[str] = None
+    source_revision: Optional[str] = None
+    source_synced_at: Optional[datetime] = None
     rule_id: str
     version: int
     insurer_id: str
@@ -76,6 +85,7 @@ class Diagnosis(BaseModel):
 
 
 class CaseItem(BaseModel):
+    code_system: Optional[str] = None
     type: str  # "drug" | "procedure" | "service"
     code: str
     name: Optional[str] = None
@@ -88,6 +98,9 @@ CaseStatusType = Literal["Approved", "Needs attention", "Missing or wrong info"]
 
 
 class Case(BaseModel):
+    jurisdiction: Optional[str] = None
+    policy_environment: Literal["official", "demo"] = "demo"
+    is_synthetic: bool = True
     case_id: str
     insurer_id: str = ""
     insurer_name: Optional[str] = None
@@ -252,6 +265,14 @@ PolicyChangeType = Literal["new_rule", "modification", "delayed", "cancelled"]
 
 
 class ProposedPolicyChange(BaseModel):
+    requires_billing_articles: bool = False
+    billing_articles_verified: bool = False
+    jurisdictions: List[str] = Field(default_factory=list)
+    code_system: Optional[str] = None
+    scope_verified: bool = True
+    catalog_id: Optional[str] = None
+    source_revision: Optional[str] = None
+    source_synced_at: Optional[datetime] = None
     proposal_id: str
     document_id: str
     document_name: str

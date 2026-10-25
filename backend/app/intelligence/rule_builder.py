@@ -8,6 +8,14 @@ from app.engine.matcher import normalize_insurer_id, match_proposal_to_rule
 
 def missing_required_fields(p: ProposedPolicyChange) -> List[str]:
     missing = []
+    if p.requires_billing_articles and not p.billing_articles_verified:
+        missing.append("verified_associated_billing_articles")
+    if not p.scope_verified:
+        missing.append("verified_plan_and_jurisdiction_scope")
+    if p.catalog_id and not p.jurisdictions:
+        missing.append("jurisdictions")
+    if p.catalog_id and not p.code_system:
+        missing.append("code_system")
     if normalize_insurer_id(p.insurer_id) in {"", "*", "unknown", "none", "unverified"}:
         missing.append("insurer_id")
     if not p.plan_ids or any(not x.strip() or x.lower() in {"unknown", "none"} for x in p.plan_ids):
@@ -57,7 +65,7 @@ def build_proposed_rule(p: ProposedPolicyChange, rules: List[Rule]) -> Rule:
     return Rule(
         rule_id=rule_id, version=prior.version + 1 if prior else 1,
         insurer_id=normalize_insurer_id(p.insurer_id), plan_ids=p.plan_ids,
-        category=p.target_type, target=Target(type=p.target_type, code=p.target_code.strip().upper(), name=p.target_name),
+        category=p.target_type, target=Target(type=p.target_type, code=p.target_code.strip().upper(), name=p.target_name, code_system=p.code_system),
         effect=p.proposed_effect, conditions=p.conditions if p.conditions is not None else prior.conditions if prior and p.change_type in {"delayed", "cancelled"} else None,
         status=RuleStatus.CANCELLED if p.change_type == "cancelled" else RuleStatus.EFFECTIVE,
         effective_from=p.effective_from, effective_to=p.effective_to,
@@ -66,5 +74,7 @@ def build_proposed_rule(p: ProposedPolicyChange, rules: List[Rule]) -> Rule:
         bulletin_summary=p.supporting_quote,
         change_type=p.change_type,
         replaces_version=prior.version if prior and p.change_type in {"delayed", "cancelled"} else None,
-        is_synthetic=p.is_synthetic,
+        requires_billing_articles=p.requires_billing_articles, billing_articles_verified=p.billing_articles_verified,
+        is_synthetic=p.is_synthetic, jurisdictions=p.jurisdictions, scope_verified=p.scope_verified,
+        catalog_id=p.catalog_id, source_revision=p.source_revision, source_synced_at=p.source_synced_at,
     )

@@ -51,7 +51,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#12544F]/80 uppercase tracking-wider">
-              Approved
+              No checked issue
             </span>
             <span className="h-2.5 w-2.5 rounded-full bg-[#2A835F]" />
           </div>
@@ -59,7 +59,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             {counts.approved}
           </div>
           <p className="mt-2 text-xs text-[#12544F]/70">
-            Cases that are complete and covered.
+            No issue detected under the checked rules.
           </p>
         </div>
 
@@ -161,7 +161,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 {clean_claims.percentage}%
               </span>
               <span className="text-xs font-semibold text-[#12544F]/70">
-                ({clean_claims.approved_count} of {clean_claims.total_checked} cases complete & covered)
+                ({clean_claims.approved_count} of {clean_claims.total_checked} cases with no checked issue)
               </span>
             </div>
           </div>
@@ -204,7 +204,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <div className="flex items-center space-x-3 text-[10px] font-bold">
               <span className="inline-flex items-center space-x-1 text-[#2A835F]">
                 <span className="h-2 w-2 rounded-full bg-[#2A835F]" />
-                <span>Approved</span>
+                <span>No checked issue</span>
               </span>
               <span className="inline-flex items-center space-x-1 text-[#D97706]">
                 <span className="h-2 w-2 rounded-full bg-[#D97706]" />
@@ -253,7 +253,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                         <div
                           style={{ width: `${appPct}%` }}
                           className="h-full bg-[#2A835F]"
-                          title={`Approved: ${item.approved}`}
+                          title={`No checked issue: ${item.approved}`}
                         />
                       )}
                       {item.needs_attention > 0 && (

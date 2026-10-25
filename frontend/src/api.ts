@@ -83,6 +83,9 @@ export async function fetchPolicyBulletin(ruleId: string): Promise<PolicyBulleti
 
 export async function uploadPatientFile(data: {
   specialty: string;
+  policy_environment?: string;
+  jurisdiction?: string;
+  code_system?: string;
   patient_text?: string;
   prescription_text?: string;
   insurer_id?: string;
@@ -441,3 +444,14 @@ export async function setDemoMode(demoMode: boolean): Promise<{ success: boolean
   return res.json();
 }
 
+
+export async function workflowRequest(path: string, body?: unknown): Promise<any> {
+  const res = await apiFetch(`${API_BASE}${path}`, body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(typeof error.detail === 'string' ? error.detail : JSON.stringify(error.detail));
+  }
+  return res.json();
+}
