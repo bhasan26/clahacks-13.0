@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { workflowRequest } from "../api";
+import { ClaimFindingsPanel } from "./ClaimFindingsPanel";
 const field = "w-full border border-[#D8E5DC] rounded-xl p-2 text-xs";
 const button =
   "px-4 py-2 rounded-xl bg-[#092328] text-white text-xs font-bold disabled:opacity-50 cursor-pointer";
@@ -38,8 +39,16 @@ export function ClaimsWorkspace({
     documents: "",
     prior_approval_ref: "",
   });
-  const load = async () =>
-    setReports(await workflowRequest("/claims/findings"));
+  const load = async () => {
+    const latest = await workflowRequest("/claims/findings");
+    setReports(latest);
+    setSelected((previous: any) =>
+      previous
+        ? latest.find((report: any) => report.case_id === previous.case_id) ||
+          previous
+        : null,
+    );
+  };
   useEffect(() => {
     load().catch((e) => setError(e.message));
     const timer = setInterval(() => load().catch(() => {}), 5000);
@@ -332,45 +341,7 @@ export function ClaimsWorkspace({
             <h2 className="font-bold">Findings: {selected.case_id}</h2>
             <button onClick={() => setSelected(null)}>Close</button>
           </div>
-          <p className="text-sm font-bold">{selected.status}</p>
-          <p className="text-xs">{selected.notice}</p>
-          {selected.coverage_gaps.map((g: string) => (
-            <p className="text-xs text-amber-900" key={g}>
-              {g}
-            </p>
-          ))}
-          {selected.findings.map((f: any, i: number) => (
-            <div key={i} className="border-t pt-3 text-xs space-y-1">
-              <strong>
-                {f.item.name || f.item.code} · {f.result}
-              </strong>
-              <p>
-                {f.policy_reference || "No verified policy"} · version{" "}
-                {f.policy_version ?? "unknown"} · effective{" "}
-                {f.effective_date || "unknown"}{" "}
-                {f.policy_is_synthetic ? "· SIMULATED" : ""}
-              </p>
-              <blockquote>
-                {f.source_evidence || "Source evidence is unavailable."}
-              </blockquote>
-              {f.source_url && (
-                <a
-                  className="underline text-[#2A835F]"
-                  href={f.source_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Policy source
-                </a>
-              )}
-              <p>
-                Required documents:{" "}
-                {f.required_documents.join(", ") ||
-                  "No verified document requirement found"}
-              </p>
-              <p>Follow-up: {f.follow_up}</p>
-            </div>
-          ))}
+          <ClaimFindingsPanel report={selected} />
         </section>
       )}
     </div>

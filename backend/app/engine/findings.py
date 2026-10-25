@@ -6,7 +6,7 @@ from app.engine.checker import evaluate_case
 from app.engine.matcher import normalize_insurer_id
 
 
-def claim_findings(case, db):
+def eligible_policy_rules(case, db):
     eligible = []
     gaps = []
     for rule in db.get_all_rules():
@@ -39,6 +39,59 @@ def claim_findings(case, db):
                     )
                 continue
         eligible.append(rule)
+    return eligible, gaps
+
+
+def policy_gap_reason(case, item, db):
+    rules = [
+        r
+        for r in db.get_all_rules()
+        if normalize_insurer_id(r.insurer_id) == normalize_insurer_id(case.insurer_id)
+    ]
+    environment = (
+        "official" if case.policy_environment == "official" else "simulated or verified"
+    )
+    rules = [
+        r for r in rules if case.policy_environment == "demo" or not r.is_synthetic
+    ]
+    if not rules:
+        return f"No approved {environment} policy is available locally for insurer {case.insurer_id or '(missing)'}."
+    from app.engine.matcher import match_plan, match_jurisdiction, match_item_code
+
+    for predicate, reason in [
+        (
+            lambda r: r.scope_verified and r.verification_status == "approved",
+            "Policy scope has not been verified and approved.",
+        ),
+        (
+            lambda r: match_plan(r.plan_ids, case.plan_id),
+            f"No approved policy matches exact plan {case.plan_id or '(missing)'}.",
+        ),
+        (
+            lambda r: match_jurisdiction(r.jurisdictions, case.jurisdiction),
+            f"No approved policy matches state/jurisdiction {case.jurisdiction or '(missing)'}.",
+        ),
+        (
+            lambda r: (
+                r.target.type == item.type and match_item_code(r.target.code, item.code)
+            ),
+            f"No approved policy matches {item.type} code {item.code or '(missing)'}.",
+        ),
+        (
+            lambda r: (
+                not r.target.code_system or r.target.code_system == item.code_system
+            ),
+            f"No approved policy matches code system {item.code_system or '(missing)'}.",
+        ),
+    ]:
+        rules = [r for r in rules if predicate(r)]
+        if not rules:
+            return reason
+    return f"No current, fresh, unambiguous approved policy applies on service date {case.service_date or '(missing)'}. Check effective dates, source freshness and policy review status."
+
+
+def claim_findings(case, db):
+    eligible, gaps = eligible_policy_rules(case, db)
     evaluation = evaluate_case(case, eligible)
     unknown = any(
         v.result in {"Value wrong", "No rule found, verify with the insurer"}
@@ -89,6 +142,18 @@ def claim_findings(case, db):
                         or (rule.conditions or {}).get("requires_prior_approval")
                     )
                 ),
+                "missing_documents": [
+                    doc
+                    for doc in (rule.conditions or {}).get("required_documents", [])
+                    if doc not in case.documents
+                ]
+                if rule
+                else [],
+                "prior_authorization_present": bool(case.prior_approval_ref),
+                "prior_authorization_reference": case.prior_approval_ref,
+                "policy_missing_reason": policy_gap_reason(case, verdict.item, db)
+                if not rule
+                else None,
                 "follow_up": verdict.what_to_do,
             }
         )
@@ -109,6 +174,7 @@ def claim_findings(case, db):
         "plan_id": case.plan_id,
         "jurisdiction": case.jurisdiction,
         "service_date": case.service_date,
+        "member_ref": case.member_ref,
         "status": status,
         "policy_environment": case.policy_environment,
         "is_synthetic_patient": case.is_synthetic,

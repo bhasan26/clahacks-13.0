@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Case, CaseCheckResult, ItemVerdict, CaseStatusType, ItemResultType, Alert, AlertTask } from '../types';
+import { Case, ClaimFindingsReport, CaseCheckResult, ItemVerdict, CaseStatusType, ItemResultType, Alert, AlertTask } from '../types';
 import { fetchCaseAlerts, updateAlertTask } from '../api';
 import { PolicyBulletinModal } from './PolicyBulletinModal';
+import { ClaimFindingsPanel } from './ClaimFindingsPanel';
 
 interface CaseDetailModalProps {
+  findings?: ClaimFindingsReport | null;
   caseData: Case | null;
   checkResult: CaseCheckResult | null;
   onClose: () => void;
@@ -11,6 +13,7 @@ interface CaseDetailModalProps {
 
 export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
   caseData,
+  findings,
   checkResult,
   onClose,
 }) => {
@@ -38,7 +41,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
 
   if (!caseData || !checkResult) return null;
 
-  const activeAlert = alerts.find((a) => a.status === 'open') || alerts[0];
+  const activeAlert = alerts.find((a) => a.status === 'open');
 
   const handleToggleTask = async (alertId: string, task: AlertTask) => {
     const nextStatus: 'open' | 'in_progress' | 'completed' =
@@ -164,12 +167,12 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#12544F]/75 pt-1 border-t border-[#EAEFEA]">
             <span>
               <strong className="text-[#092328] font-semibold">Insurer:</strong>{' '}
-              {caseData.insurer_name || caseData.insurer_id || 'Demo Insurance Co.'}
+              {caseData.insurer_name || caseData.insurer_id || 'Insurer missing'}
             </span>
             <span>·</span>
             <span>
               <strong className="text-[#092328] font-semibold">Plan:</strong>{' '}
-              {caseData.plan_id || 'PLAN-GOLD'}
+              {caseData.plan_id || 'Plan ID missing'}
             </span>
             <span>·</span>
             <span>
@@ -188,7 +191,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
           {/* ------------------------------------------------------------- */}
           {/* Phase 7: Explainable Action Center Panel                       */}
           {/* ------------------------------------------------------------- */}
-          {(caseData.status === 'Needs attention' || activeAlert) && (
+          {activeAlert && (
             <div className="bg-[#FFFBEB] border-2 border-[#F59E0B]/40 rounded-2xl p-5 space-y-4 shadow-sm animate-in fade-in">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center space-x-2.5">
@@ -224,14 +227,14 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
                 <div>
                   <span className="text-[10px] uppercase font-bold text-[#92400E]/70 block">Effective Date & Policy</span>
                   <span className="font-bold text-[#092328]">
-                    {activeAlert?.effective_date || 'Effective 1 Nov 2026'} · <span className="font-mono">{activeAlert?.rule_id || 'Policy Rule'}</span>
+                    {activeAlert?.effective_date || 'Effective date unavailable'} · <span className="font-mono">{activeAlert?.rule_id || 'Policy Rule'}</span>
                   </span>
                 </div>
 
                 <div className="md:col-span-2 pt-2 border-t border-[#F59E0B]/20">
                   <span className="text-[10px] uppercase font-bold text-[#92400E]/70 block">Verified Document Evidence</span>
                   <blockquote className="mt-1 pl-3 border-l-2 border-[#2A835F] text-[#092328] font-medium italic text-[11px] bg-[#F0F5F2]/50 py-1.5 pr-2 rounded-r">
-                    "{activeAlert?.evidence_quote || 'Beginning November 1, 2026, PLAN-GOLD will no longer cover DRUG-A. This change applies to services performed on or after November 1, 2026.'}"
+                    "{activeAlert?.evidence_quote || 'No verified source quotation is available. Review the policy evidence before acting.'}"
                   </blockquote>
                 </div>
 
@@ -247,7 +250,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
               <div className="space-y-2 pt-2 border-t border-[#F59E0B]/20">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-[#92400E] uppercase tracking-wide">
-                    Action Queue Tasks ({activeAlert?.tasks?.filter((t) => t.status === 'completed').length || 0}/{activeAlert?.tasks?.length || 5} Completed)
+                    Action Queue Tasks ({activeAlert?.tasks?.filter((t) => t.status === 'completed').length || 0}/{activeAlert?.tasks?.length || 0} Completed)
                   </span>
                   <span className="text-[10px] text-[#B45309] font-medium">Click task to advance status</span>
                 </div>
@@ -255,13 +258,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
                 <div className="space-y-1.5">
                   {(activeAlert?.tasks && activeAlert.tasks.length > 0
                     ? activeAlert.tasks
-                    : [
-                        { task_id: 't1', title: 'Review policy mandate and governing date criteria', status: 'open' as const },
-                        { task_id: 't2', title: 'Verify member eligibility and plan formulary tier', status: 'open' as const },
-                        { task_id: 't3', title: 'Check prior authorization status or submit PA packet', status: 'open' as const },
-                        { task_id: 't4', title: 'Obtain required clinical documentation or lab results', status: 'open' as const },
-                        { task_id: 't5', title: 'Contact responsible clinical department before submission', status: 'open' as const },
-                      ]
+                    : []
                   ).map((t) => {
                     const isCompleted = t.status === 'completed';
                     const isInProgress = t.status === 'in_progress';
@@ -352,7 +349,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
           )}
 
           {/* Item List: Each item shows one result */}
-          <div className="space-y-4">
+          {findings ? <ClaimFindingsPanel report={findings} /> : <div className="space-y-4">
             <div className="text-xs font-bold text-[#12544F]/80 uppercase tracking-wider">
               Items Checked ({checkResult.results.length})
             </div>
@@ -398,7 +395,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#2A835F] text-white text-[11px] font-bold hover:bg-[#20684b] transition-colors shadow-2xs cursor-pointer"
                         >
-                          <span>Official Payer Document</span>
+                          <span>{caseData.policy_environment === "demo" ? "Simulated policy source" : "Policy source"}</span>
                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                           </svg>
@@ -427,7 +424,7 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
             <div className="mt-4 p-3 rounded-xl bg-[#F0F5F2] text-[11px] text-[#12544F]/80 leading-normal">
               The agent only notifies. It never edits, rejects or submits, and never suggests a medical alternative.
             </div>
-          </div>
+          </div>}
         </div>
 
         {/* Modal Footer */}

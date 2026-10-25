@@ -21,7 +21,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Literal
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Automatically load .env if present
 env_file = Path(__file__).resolve().parent.parent / ".env"
@@ -256,154 +256,189 @@ def get_policy_bulletin(rule_id: str):
 # ---------------------------------------------------------
 # Multimodal AI Intake & Live Pre-Check
 # ---------------------------------------------------------
+class ReviewedIntakeClaim(BaseModel):
+    insurer_id: Optional[str] = None
+    insurer_name: Optional[str] = None
+    plan_id: Optional[str] = None
+    plan_name: Optional[str] = None
+    member_ref: Optional[str] = None
+    group_number: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    service_date: Optional[str] = None
+    specialty: Optional[str] = None
+    patient_name: Optional[str] = None
+    diagnosis_code: Optional[str] = None
+    diagnosis_desc: Optional[str] = None
+    prior_approval_ref: Optional[str] = None
+    documents: List[str] = Field(default_factory=list, max_length=100)
+    items: List[CaseItem] = Field(default_factory=list, max_length=50)
+
+
 class AnalyzeIntakePayload(BaseModel):
     sample_id: Optional[str] = None
     card_image_b64: Optional[str] = None
-    card_text: Optional[str] = None
+    card_text: Optional[str] = Field(default=None, max_length=1000000)
     clinical_doc_b64: Optional[str] = None
-    clinical_text: Optional[str] = None
+    clinical_text: Optional[str] = Field(default=None, max_length=1000000)
     selected_insurer_id: Optional[str] = None
     selected_insurer_name: Optional[str] = None
     selected_plan_id: Optional[str] = None
+    policy_environment: Literal["official", "demo"] = "official"
+    reviewed_claim: Optional[ReviewedIntakeClaim] = None
 
 
 @app.post("/api/intake/analyze")
 def analyze_intake_files(payload: AnalyzeIntakePayload):
-    """
-    Multimodal AI Intake:
-    1. Reads insurance card (optional). If card is absent, auto-detects payer from clinical order or selector.
-    2. Reads clinical documents (specialty, diagnoses, drugs, procedures, attached docs).
-    3. Runs the deterministic coverage engine against active payer rules.
-    4. Attaches official policy bulletin citations and officer action instructions.
-    """
-    from app.intake.analyzer import extract_base64_and_mime
-    for encoded in (payload.card_image_b64, payload.clinical_doc_b64):
-        if encoded:
-            try:
-                clean, mime = extract_base64_and_mime(encoded)
-                import base64
-                process_uploaded_document(base64.b64decode(clean), "intake", mime)
-            except (ValueError, DocumentProcessingError):
-                raise HTTPException(status_code=400, detail="Invalid, unsupported, or oversized intake file.")
-    if payload.sample_id:
-        try:
-            preset = get_fallback_sample(payload.sample_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-        card_data = preset["card"]
-        clinical_data = preset["clinical"]
-    else:
-        if payload.card_image_b64 or (payload.card_text and payload.card_text.strip()):
-            card_data = analyze_insurance_card(
-                image_b64=payload.card_image_b64,
-                text_content=payload.card_text,
-            )
-        else:
-            card_data = {}
-
-        clinical_data = analyze_clinical_document(
-            doc_b64=payload.clinical_doc_b64,
-            text_content=payload.clinical_text,
-        )
-
-        # Robust Payer Resolution (Insurance card is completely optional):
-        # 1. User explicitly picked an insurer from selector dropdown
-        if payload.selected_insurer_id and payload.selected_insurer_id != "auto":
-            ins_id = payload.selected_insurer_id
-            ins_name = payload.selected_insurer_name or (
-                "UnitedHealthcare" if ins_id == "uhc" else (
-                    "Aetna Health" if ins_id == "aetna" else (
-                        "Blue Cross Blue Shield" if ins_id == "bcbs" else "Demo Insurance Co."
-                    )
-                )
-            )
-        # 2. Card was uploaded and gave a valid payer
-        elif card_data.get("insurer_id") and card_data["insurer_id"] not in ("demo-insurer", ""):
-            ins_id = card_data["insurer_id"]
-            ins_name = card_data.get("insurer_name") or (
-                "UnitedHealthcare" if ins_id == "uhc" else (
-                    "Aetna Health" if ins_id == "aetna" else (
-                        "Blue Cross Blue Shield" if ins_id == "bcbs" else ins_id.upper()
-                    )
-                )
-            )
-        # 3. Clinical document gave an insurer (e.g. from header or encounter note)
-        elif clinical_data.get("insurer_id"):
-            ins_id = clinical_data["insurer_id"]
-            ins_name = clinical_data.get("insurer_name") or (
-                "UnitedHealthcare" if ins_id == "uhc" else (
-                    "Aetna Health" if ins_id == "aetna" else (
-                        "Blue Cross Blue Shield" if ins_id == "bcbs" else "UnitedHealthcare"
-                    )
-                )
-            )
-        # Payer and plan must be supplied by source text/card or the reviewer.
-        else:
-            ins_id, ins_name = "", None
-        card_data["insurer_id"] = ins_id
-        card_data["insurer_name"] = ins_name
-        card_data["plan_id"] = payload.selected_plan_id or card_data.get("plan_id") or clinical_data.get("plan_id") or ""
-
-    # Build provisional case for instant rule evaluation
-    sdate = None
-    if clinical_data.get("service_date"):
-        try:
-            sdate = datetime.strptime(clinical_data["service_date"], "%Y-%m-%d").date()
-        except Exception:
-            pass
-
-    raw_items = clinical_data.get("items", [])
-    case_items = [
-        CaseItem(
-            type=item.get("type", "drug"),
-            code=item.get("code") or "",
-            name=item.get("name", "Prescribed Item"),
-            quantity=item.get("quantity", 1),
-        )
-        for item in raw_items
-    ]
-
-
-    dx_code = clinical_data.get("diagnosis_code")
-    dx_desc = clinical_data.get("diagnosis_desc") or "Clinical Order Intake"
-
-    if not sdate:
-        clinical_data.setdefault("validation_warnings", []).append("Missing service date; coverage cannot be assessed.")
-    provisional_case = Case(
-        case_id="PROVISIONAL", policy_environment="demo" if payload.sample_id else "official",
-        insurer_id=card_data.get("insurer_id") or "",
-        insurer_name=card_data.get("insurer_name"),
-        plan_id=card_data.get("plan_id") or "",
-        member_ref=card_data.get("member_ref") or f"M-{uuid.uuid4().hex[:6]}",
-        group_number=card_data.get("group_number"),
-        specialty=clinical_data.get("specialty") or "Cardiology",
-        service_date=sdate,
-        visit_type="outpatient",
-        diagnoses=[Diagnosis(code=dx_code, description=dx_desc)] if dx_code else [],
-        items=case_items,
-        documents=clinical_data.get("documents", []),
-        prior_approval_ref=clinical_data.get("prior_approval_ref"),
-        status="Approved",
+    """Local extraction → editable claim details → the same approved-policy findings as Claims."""
+    from app.intake.local_parser import (
+        INSURER_NAMES,
+        claim_missing_fields,
+        normalize_date,
     )
+    from app.engine.matcher import normalize_insurer_id
+    from app.engine.findings import claim_findings, eligible_policy_rules
 
-    eval_result = evaluate_case(provisional_case, list(store.rules.values()))
+    try:
+        if payload.reviewed_claim is not None and not any(
+            (
+                payload.card_image_b64,
+                payload.card_text,
+                payload.clinical_doc_b64,
+                payload.clinical_text,
+                payload.sample_id,
+            )
+        ):
+            card, clinical = {}, {}
+        elif payload.sample_id:
+            preset = get_fallback_sample(payload.sample_id)
+            card, clinical = preset["card"], preset["clinical"]
+        else:
+            card = analyze_insurance_card(payload.card_image_b64, payload.card_text)
+            clinical = analyze_clinical_document(
+                payload.clinical_doc_b64, payload.clinical_text
+            )
+    except (ValueError, DocumentProcessingError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid intake document: {exc}")
+    warnings = list(card.get("validation_warnings", [])) + list(
+        clinical.get("validation_warnings", [])
+    )
+    details = dict(clinical)
+    for field in (
+        "insurer_id",
+        "insurer_name",
+        "plan_id",
+        "plan_name",
+        "member_ref",
+        "group_number",
+        "jurisdiction",
+    ):
+        card_value, clinical_value = card.get(field), clinical.get(field)
+        if card_value and clinical_value and card_value != clinical_value:
+            details[field] = None
+            warnings.append(
+                f"Conflicting {field.replace('_', ' ')} in the card and clinical document. Enter the confirmed value manually."
+            )
+        else:
+            details[field] = card_value or clinical_value
+    if payload.selected_insurer_id and payload.selected_insurer_id != "auto":
+        details["insurer_id"] = payload.selected_insurer_id
+        details["insurer_name"] = payload.selected_insurer_name or INSURER_NAMES.get(
+            normalize_insurer_id(payload.selected_insurer_id)
+        )
+    if payload.selected_plan_id is not None:
+        details["plan_id"] = payload.selected_plan_id
+    if payload.reviewed_claim is not None:
+        details.update(payload.reviewed_claim.model_dump(exclude_unset=True))
+    insurer_id = normalize_insurer_id(details.get("insurer_id"))
+    insurer_name = details.get("insurer_name") or INSURER_NAMES.get(insurer_id)
+    service = normalize_date(details.get("service_date"))
+    if details.get("service_date") and not service:
+        warnings.append("Invalid service date. Enter YYYY-MM-DD.")
+    authorization = (details.get("prior_approval_ref") or "").strip() or None
+    if authorization:
+        import re
 
-    # Find matching policy bulletin if an issue is flagged
-    matching_bulletin = None
-    for verdict in eval_result.results:
-        if verdict.rule_id:
-            matching_bulletin = store.get_bulletin(verdict.rule_id)
-            if matching_bulletin:
-                break
-
+        if re.match(
+            r"^(?:pending|not\b|none\b|no\b|missing\b|requested\b|unavailable\b)",
+            authorization,
+            re.I,
+        ):
+            authorization = None
+            warnings.append(
+                "Prior authorization is pending or not supplied; no authorization reference was confirmed."
+            )
+    items = [CaseItem.model_validate(item) for item in details.get("items", [])]
+    for item in items:
+        item.code = item.code.strip().upper()
+        item.type = item.type.strip().lower()
+        item.code_system = (
+            item.code_system.strip().upper() if item.code_system else None
+        )
+    provisional = Case(
+        case_id="PROVISIONAL",
+        policy_environment=payload.policy_environment,
+        insurer_id=insurer_id,
+        insurer_name=insurer_name,
+        plan_id=(details.get("plan_id") or "").strip(),
+        member_ref=(details.get("member_ref") or "").strip(),
+        group_number=details.get("group_number"),
+        jurisdiction=(details.get("jurisdiction") or "").strip().upper() or None,
+        service_date=date.fromisoformat(service) if service else None,
+        specialty=details.get("specialty") or "Unspecified",
+        items=items,
+        diagnoses=[
+            Diagnosis(
+                code=details["diagnosis_code"],
+                description=details.get("diagnosis_desc"),
+            )
+        ]
+        if details.get("diagnosis_code")
+        else [],
+        documents=details.get("documents") or [],
+        prior_approval_ref=authorization,
+    )
+    missing = claim_missing_fields(provisional)
+    report = claim_findings(provisional, store)
+    evaluation = evaluate_case(
+        provisional, eligible_policy_rules(provisional, store)[0]
+    )
+    if missing:
+        report["status"] = "Unable to verify / insufficient policy information"
+        report["engine_status"] = "Missing or wrong info"
+        evaluation.status = "Missing or wrong info"
+    warnings.extend(row["message"] for row in missing)
+    report["validation_warnings"] = list(dict.fromkeys(warnings))
     return {
         "success": True,
-        "policy_environment": "demo" if payload.sample_id else "official",
-        "privacy_notice": "Clinical documents are processed locally; no clinical files or identifiers are sent to external AI or insurer sources.",
-        "card": card_data,
-        "clinical": clinical_data,
-        "check_result": eval_result,
-        "bulletin": matching_bulletin,
+        "policy_environment": provisional.policy_environment,
+        "privacy_notice": "Clinical files and identifiers stay local. Scanned-image OCR is unavailable; correct unresolved fields manually.",
+        "extraction_method": "local_structured_text"
+        if not payload.reviewed_claim
+        else "reviewed_local_fields",
+        "claim": provisional,
+        "card": {
+            key: getattr(provisional, key, None)
+            for key in (
+                "insurer_id",
+                "insurer_name",
+                "plan_id",
+                "member_ref",
+                "group_number",
+                "jurisdiction",
+            )
+        }
+        | {"plan_name": details.get("plan_name")},
+        "clinical": {
+            **details,
+            "service_date": service,
+            "items": items,
+            "specialty": provisional.specialty,
+        },
+        "validation_warnings": list(dict.fromkeys(warnings)),
+        "missing_fields": missing,
+        "findings": report,
+        "check_result": evaluation,
+        "bulletin": None,
     }
 
 
@@ -430,6 +465,7 @@ class UploadCasePayload(BaseModel):
     diagnosis_code: Optional[str] = None
     diagnosis_desc: Optional[str] = None
     documents: Optional[List[str]] = None
+    items: Optional[List[CaseItem]] = Field(default=None, max_length=50)
 
 
 @app.post("/api/cases/upload")
@@ -437,20 +473,64 @@ def upload_patient_file(payload: UploadCasePayload):
     """Upload patient file and prescription; extracts items and deterministically checks coverage."""
     new_id = f"C-{uuid.uuid4().hex[:12].upper()}"
 
-    required = ("insurer_id", "plan_id", "member_ref", "item_code", "service_date", "item_type")
-    missing = [field for field in required if not getattr(payload, field)]
+    required = ("insurer_id", "plan_id", "member_ref", "service_date") + (
+        () if payload.items is not None else ("item_code", "item_type")
+    )
+    missing = [
+        field for field in required if not (getattr(payload, field) or "").strip()
+    ]
     if missing:
-        raise HTTPException(status_code=422, detail=f"Verified values required: {', '.join(missing)}")
+        raise HTTPException(
+            status_code=422, detail=f"Verified values required: {', '.join(missing)}"
+        )
     try:
         sdate = date.fromisoformat(payload.service_date)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid service date.")
-    itype, icode, iname = payload.item_type, payload.item_code, payload.item_name
-    member_id, ins_id, ins_name, p_id = payload.member_ref, payload.insurer_id, payload.insurer_name, payload.plan_id
-    dx_code, dx_desc, docs = payload.diagnosis_code, payload.diagnosis_desc, payload.documents or []
+    case_items = (
+        payload.items
+        if payload.items is not None
+        else [
+            CaseItem(
+                type=payload.item_type,
+                code=payload.item_code,
+                name=payload.item_name,
+                code_system=payload.code_system,
+            )
+        ]
+    )
+    if not case_items or any(
+        not item.code.strip() or item.type not in {"procedure", "drug", "service"}
+        for item in case_items
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Every requested item requires an explicit type and billing code.",
+        )
+    if payload.items is not None and (
+        not (payload.jurisdiction or "").strip()
+        or any(not (item.code_system or "").strip() for item in case_items)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="State/jurisdiction and each item's code system are required for reviewed intake.",
+        )
+    member_id, ins_id, ins_name, p_id = (
+        payload.member_ref,
+        payload.insurer_id,
+        payload.insurer_name,
+        payload.plan_id,
+    )
+    dx_code, dx_desc, docs = (
+        payload.diagnosis_code,
+        payload.diagnosis_desc,
+        payload.documents or [],
+    )
 
     new_case = Case(
-        case_id=new_id, jurisdiction=payload.jurisdiction, policy_environment=payload.policy_environment,
+        case_id=new_id,
+        jurisdiction=payload.jurisdiction,
+        policy_environment=payload.policy_environment,
         insurer_id=ins_id,
         insurer_name=ins_name,
         plan_id=p_id,
@@ -460,26 +540,31 @@ def upload_patient_file(payload: UploadCasePayload):
         service_date=sdate,
         visit_type="outpatient",
         diagnoses=[Diagnosis(code=dx_code, description=dx_desc)] if dx_code else [],
-        items=[CaseItem(type=itype, code=icode, name=iname, quantity=1, code_system=payload.code_system)],
+        items=case_items,
         documents=docs,
         prior_approval_ref=payload.prior_approval_ref,
         status="Approved",
     )
 
     # Evaluate deterministically
-    eval_res = evaluate_case(new_case, list(store.rules.values()))
+    from app.engine.findings import claim_findings, eligible_policy_rules
+
+    eval_res = evaluate_case(new_case, eligible_policy_rules(new_case, store)[0])
     new_case.status = eval_res.status
     store.cases[new_id] = new_case
 
-    store.record_audit("CASE_UPLOADED", {"case_id": new_id, "specialty": payload.specialty}, actor="claims-officer")
+    store.record_audit(
+        "CASE_UPLOADED",
+        {"case_id": new_id, "specialty": payload.specialty},
+        actor="claims-officer",
+    )
 
     return {
         "success": True,
         "case": new_case,
         "check_result": eval_res,
+        "findings": claim_findings(new_case, store),
     }
-
-
 # ---------------------------------------------------------
 # Page 4: Updates
 # ---------------------------------------------------------

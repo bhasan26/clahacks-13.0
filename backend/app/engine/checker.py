@@ -291,26 +291,20 @@ def evaluate_case(
     known_rules = [r for r in rules if as_of is None or r.received_at <= as_of]
     rules = rules_for_date(known_rules, target_date) if target_date else []
 
-    # Check if core fields are missing or wrong
-    if not case.service_date or not case.insurer_id or not case.plan_id or not case.items:
+    missing = [(field, label) for field, label in (
+        ('service_date', 'Service date'), ('insurer_id', 'Insurer ID'),
+        ('plan_id', 'Exact plan ID'), ('items', 'Requested procedure, medication or service'),
+    ) if not getattr(case, field)]
+    if missing:
+        details = ", ".join(label for _, label in missing)
+        items = case.items or [CaseItem(type="case", code="items", name="Requested procedure, medication or service")]
         return CaseCheckResult(
-            case_id=case.case_id,
-            specialty=case.specialty,
-            status="Missing or wrong info",
-            items_count=len(case.items),
-            results=[
-                ItemVerdict(
-                    item=CaseItem(type="case", code="INFO", name="Patient Record"),
-                    result="Value wrong",
-                    rule_id=None,
-                    rule_version=None,
-                    effective_date=None,
-                    plain_sentence="Patient service date or insurer plan reference is missing or wrong.",
-                    rule_reference="Patient record validation.",
-                    what_to_do="Review and correct patient record values before submitting.",
-                    full_issue_text="Patient service date or insurer plan reference is missing or wrong. Review and correct patient record values before submitting.",
-                )
-            ],
+            case_id=case.case_id, specialty=case.specialty, status="Missing or wrong info",
+            items_count=len(case.items), results=[ItemVerdict(
+                item=item, result="Value wrong", plain_sentence=f"Cannot verify {item.name or item.code}: missing {details}.",
+                rule_reference="Claim field validation.", what_to_do=f"Enter and verify: {details}.",
+                full_issue_text=f"Cannot verify {item.name or item.code}: missing {details}. Enter the missing claim details and recheck.",
+            ) for item in items],
         )
 
     for item in case.items:

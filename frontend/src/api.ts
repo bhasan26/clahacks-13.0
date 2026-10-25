@@ -11,6 +11,7 @@ import {
   AuditEntry,
   CaseCheckResult,
   IntakeAnalysisResult,
+  ReviewedIntakeClaim,
   PolicyBulletin,
   ExtractedDocumentResult,
   ProposedPolicyChange,
@@ -56,6 +57,8 @@ export async function fetchCaseDetail(caseId: string): Promise<CaseDetailRespons
 }
 
 export async function analyzeIntake(data: {
+  policy_environment?: "official" | "demo";
+  reviewed_claim?: Partial<ReviewedIntakeClaim>;
   sample_id?: string;
   card_image_b64?: string;
   card_text?: string;
@@ -70,7 +73,7 @@ export async function analyzeIntake(data: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Failed to analyze intake files');
+  if (!res.ok) { const error = await res.json(); throw new Error(typeof error.detail === 'string' ? error.detail : 'Invalid intake fields. Please check your entries.'); }
   return res.json();
 }
 
@@ -101,13 +104,14 @@ export async function uploadPatientFile(data: {
   diagnosis_code?: string;
   diagnosis_desc?: string;
   documents?: string[];
+  items?: ReviewedIntakeClaim["items"];
 }): Promise<any> {
   const res = await apiFetch(`${API_BASE}/cases/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Failed to upload patient file');
+  if (!res.ok) { const error = await res.json(); throw new Error(typeof error.detail === 'string' ? error.detail : 'Invalid claim fields. Please check your entries.'); }
   return res.json();
 }
 

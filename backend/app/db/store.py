@@ -818,10 +818,12 @@ class DataStore:
         case = self.cases.get(case_id)
         if not case:
             return None
-        eval_result = evaluate_case(case, list(self.rules.values()))
+        from app.engine.findings import claim_findings, eligible_policy_rules
+        eval_result = evaluate_case(case, eligible_policy_rules(case, self)[0])
         return {
             "case": case,
             "check_result": eval_result,
+            "findings": claim_findings(case, self),
         }
 
     def get_bulletin(self, rule_id: str) -> Optional[PolicyBulletin]:

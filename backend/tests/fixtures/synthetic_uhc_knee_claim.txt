@@ -1,0 +1,10 @@
+SYNTHETIC PATIENT CLAIM — FOR SOFTWARE TESTING ONLY
+Insurance Company: UnitedHealthcare
+Insurer ID: uhc
+Plan ID: DEMO-UHC-PPO
+State: CA
+Member ID: SYNTHETIC-001
+Procedure: Total Knee Replacement
+CPT Code: 27447
+Service Date: 2026-11-12
+Prior Authorization: PA-DEMO-001

@@ -25,6 +25,7 @@ import {
   DashboardData,
   Case,
   CaseCheckResult,
+  ClaimFindingsReport,
   InsurerUpdateEntry,
   InsurerConnectionInfo,
 } from './types';
@@ -45,6 +46,8 @@ export function App() {
   // Case Detail Modal
   const [selectedCaseData, setSelectedCaseData] = useState<Case | null>(null);
   const [selectedCaseResult, setSelectedCaseResult] = useState<CaseCheckResult | null>(null);
+
+  const [selectedFindings, setSelectedFindings] = useState<ClaimFindingsReport | null>(null);
 
   // Upload Modal
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -83,6 +86,7 @@ export function App() {
   const handleOpenCase = async (caseId: string) => {
     try {
       const detail = await fetchCaseDetail(caseId);
+      setSelectedFindings(detail.findings || null);
       setSelectedCaseData(detail.case);
       setSelectedCaseResult(detail.check_result);
     } catch (err) {
@@ -91,6 +95,7 @@ export function App() {
   };
 
   const handleCloseCaseModal = () => {
+    setSelectedFindings(null);
     setSelectedCaseData(null);
     setSelectedCaseResult(null);
   };
@@ -234,6 +239,7 @@ export function App() {
 
       {/* Page 3: Case Detail Modal */}
       <CaseDetailModal
+        findings={selectedFindings}
         caseData={selectedCaseData}
         checkResult={selectedCaseResult}
         onClose={handleCloseCaseModal}

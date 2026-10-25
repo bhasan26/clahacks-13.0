@@ -1,5 +1,7 @@
 # CoverageGuard — hospital findings and insurer policy synchronization
 
+**Patient-intake regression update:** See [PATIENT_INTAKE_REPORT.md](PATIENT_INTAKE_REPORT.md) for the subsequent selectable-PDF/editable-review repair, actual browser/HTTP evidence and current verification (**176 tests**, 38 acceptance checks, frontend build). The report below describes the preceding policy-sync delivery.
+
 Implementation branch: `codex/insurer-policy-sync`. Base: merged reliability audit `d0948f0c4d2f0b32c38f3d926899b5c201a8a2d0`. Verification: October 24, 2026 Pacific / October 25 UTC. This report replaces the earlier audit's current-status description; that audit remains in Git history.
 
 ## Result and architecture
