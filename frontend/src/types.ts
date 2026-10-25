@@ -35,6 +35,7 @@ export interface Rule {
 }
 
 export interface CaseItem {
+  code_system?: string | null;
   type: string;
   code: string;
   name?: string;
@@ -84,7 +85,36 @@ export interface PolicyBulletin {
   official_reference_url?: string;
 }
 
+export interface ReviewedIntakeClaim {
+  insurer_id: string; insurer_name: string; plan_id: string; member_ref: string;
+  jurisdiction: string; service_date: string; specialty: string;
+  group_number: string; prior_approval_ref: string; documents: string[];
+  diagnosis_code: string; diagnosis_desc: string;
+  items: Array<{ type: string; code: string; code_system?: string | null; name?: string | null; quantity?: number }>;
+}
+
+export interface ClaimFindingsReport {
+  case_id: string; insurer_id: string; insurer_name?: string | null; plan_id: string;
+  member_ref?: string; jurisdiction?: string | null; service_date?: string | null;
+  status: string; policy_environment: 'official' | 'demo'; notice: string;
+  validation_warnings?: string[]; coverage_gaps: string[];
+  findings: Array<ItemVerdict & {
+    policy_reference?: string | null; policy_version?: number | null;
+    policy_is_synthetic?: boolean | null; source_evidence?: string | null;
+    required_documents: string[]; missing_documents: string[];
+    requires_prior_authorization: boolean; prior_authorization_present: boolean;
+    prior_authorization_reference?: string | null; policy_missing_reason?: string | null;
+    follow_up: string;
+  }>;
+}
+
 export interface IntakeAnalysisResult {
+  claim: ReviewedIntakeClaim;
+  findings: ClaimFindingsReport;
+  missing_fields: Array<{field: string; message: string}>;
+  validation_warnings: string[];
+  extraction_method: string;
+  privacy_notice: string;
   policy_environment?: string;
   success: boolean;
   card: {
@@ -113,6 +143,8 @@ export interface IntakeAnalysisResult {
 }
 
 export interface Case {
+  policy_environment?: "official" | "demo";
+  jurisdiction?: string | null;
   case_id: string;
   insurer_id?: string;
   insurer_name?: string;
@@ -153,6 +185,7 @@ export interface CaseSummary {
 }
 
 export interface CaseDetailResponse {
+  findings?: ClaimFindingsReport;
   case: Case;
   check_result: CaseCheckResult;
   alerts?: Alert[];

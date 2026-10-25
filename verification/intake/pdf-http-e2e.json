@@ -1,0 +1,31 @@
+{
+  "checked_at": "2026-10-25T04:01:04.986401+00:00",
+  "transport": "real HTTP",
+  "simulation": true,
+  "browser_uploaded_pdf": true,
+  "browser_filed_case_id": "C-1B68057D181E",
+  "extraction_method": "local_structured_text",
+  "extracted_fields": {
+    "insurer_id": "uhc",
+    "plan_id": "DEMO-UHC-PPO",
+    "member_ref": "SYNTHETIC-001",
+    "jurisdiction": "CA",
+    "service_date": "2026-11-12",
+    "prior_approval_ref": "PA-DEMO-001"
+  },
+  "code_system": "CPT",
+  "item_code": "27447",
+  "baseline_status": "No issue detected under SIMULATED checked rules",
+  "unapproved_restriction_has_no_effect": true,
+  "approved_restriction_result": "Not covered",
+  "approved_restriction_policy_version": 2,
+  "ui_missing_plan_warning_and_filing_blocked": true,
+  "ui_official_mode_no_simulated_fallback": true,
+  "approved_delay_policy_version": 3,
+  "after_delay_status": "No issue detected under SIMULATED checked rules",
+  "restriction_alert_closed": true,
+  "unrelated_H003_authorization_retained": true,
+  "official_mode_result": "Unable to verify / insufficient policy information",
+  "ui_approved_restriction_evidence_inspected": true,
+  "ui_after_delay_panel_refreshed": true
+}

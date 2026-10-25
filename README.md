@@ -42,6 +42,14 @@ INSURER_SIMULATOR_STATE_PATH=/tmp/coverageguard-new-insurer.sqlite3 \
 COVERAGEGUARD_CHECK_INTERVAL=2 ./scripts/run_demo.sh
 ```
 
+## Patient PDF intake
+
+In **Claims → Local clinical file / card intake**, select **DEMO / SIMULATED policies** or **Official / verified policies** explicitly. Upload a selectable PDF or text file, paste labeled text, or provide an image for manual correction. Clinical files stay local; scanned-image OCR is unavailable.
+
+Click **Extract locally & check policies**, review the editable insurer/plan/member/state/service-date and procedure/code/system fields, correct missing details, then **Recheck corrected details** before filing. Findings show exact policy/version/date/evidence, missing documents, authorization reference presence and employee follow-up. Missing payer/plan/procedure information stays blank with a specific warning. Official mode never falls back to simulated rules.
+
+Use the [synthetic UHC knee PDF](backend/tests/fixtures/synthetic_uhc_knee_claim.pdf) or [typed-text fixture](backend/tests/fixtures/synthetic_uhc_knee_claim.txt). Exact matching demo rules must first be synchronized and reviewed. The regression fix was verified through an actual browser PDF upload, filing, restriction and delay workflow; details and limits are in [PATIENT_INTAKE_REPORT.md](PATIENT_INTAKE_REPORT.md).
+
 ## Official source support and honest limits
 
 | Source | Actual verification | Current limitation |
@@ -83,7 +91,7 @@ backend/.venv/bin/python backend/tests/qa_e2e_runner.py
 (cd frontend && npm run build)
 ```
 
-Latest: **157 pytest tests passed**, **38 acceptance checks passed**, TypeScript/Vite build passed. Dependency deprecation warnings remain. Existing tests were retained. New tests cover insurer/plan/region/code isolation, approval gates, privacy, retry/rollback, duplicate/race behavior, persistent versions and full restriction/delay impact.
+Latest: **176 pytest tests passed**, **38 acceptance checks passed**, TypeScript/Vite build passed. Dependency deprecation warnings remain. Existing tests were retained. New tests cover insurer/plan/region/code isolation, approval gates, privacy, retry/rollback, duplicate/race behavior, persistent versions and full restriction/delay impact.
 
 With the three services running, the following scripts reset **only the selected synthetic workspace** and record real HTTP results. Point them at the intended disposable demo server:
 

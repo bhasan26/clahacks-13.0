@@ -1,5 +1,7 @@
 # CoverageGuard implementation status
 
+Patient intake repaired on `codex/patient-pdf-intake-fix`: local selectable-PDF/text extraction, explicit DEMO/OFFICIAL selection, editable details/recheck, exact state/code-system propagation, all-item filing, shared evidence-backed findings and specific missing-field warnings. Actual browser upload and real HTTP restriction/delay verification passed; **176 backend tests**, **38 QA checks**, and frontend build passed. See [PATIENT_INTAKE_REPORT.md](PATIENT_INTAKE_REPORT.md). The earlier delivery status follows.
+
 Updated October 24, 2026 Pacific / October 25 UTC.
 
 The earlier reliability audit was merged as PR #1 (`d0948f0`). The current implementation extends that baseline on `codex/insurer-policy-sync`, preserving existing tests and document/rule review tools.
