@@ -45,7 +45,7 @@ export const CasesPage: React.FC<CasesPageProps> = ({
         return (
           <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#2A835F]/15 text-[#2A835F] border border-[#2A835F]/30">
             <span className="h-1.5 w-1.5 rounded-full bg-[#2A835F]" />
-            <span>Approved</span>
+            <span>No checked issue</span>
           </span>
         );
       case 'Needs attention':

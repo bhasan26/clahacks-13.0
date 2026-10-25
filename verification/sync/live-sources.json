@@ -1,0 +1,70 @@
+{
+  "checked_at": "2026-10-25T02:51:24.053386+00:00",
+  "sources": [
+    {
+      "source_id": "uhc-public",
+      "official_source_url": "https://www.uhcprovider.com/en/policies-protocols/commercial-policies/commercial-medical-drug-policies.html",
+      "source_type": "HTML index / PDF",
+      "discovery_succeeded": false,
+      "document_retrieved": false,
+      "usable_rule_extracted": false,
+      "plan_jurisdiction_verified": false,
+      "complete_claim_check": false,
+      "limitations": [
+        "Commercial index only; specific member plan and exclusions are not verified by a public PDF.",
+        "Automated indexing requires publisher permission under the published terms; this connector is disabled until an operator supplies an authorization reference. Technical public accessibility is not permission."
+      ],
+      "discovery_error": "SourceAuthorizationRequired"
+    },
+    {
+      "source_id": "aetna-public",
+      "official_source_url": "https://www.aetna.com/health-care-professionals/clinical-policy-bulletins/medical-clinical-policy-bulletins.html",
+      "source_type": "Published XML index / HTML",
+      "discovery_succeeded": false,
+      "document_retrieved": false,
+      "usable_rule_extracted": false,
+      "plan_jurisdiction_verified": false,
+      "complete_claim_check": false,
+      "limitations": [
+        "CPBs describe medical necessity; member plan benefits, state deviations and prior authorization require separate verification.",
+        "Automated indexing requires publisher permission under the published terms; this connector is disabled until an operator supplies an authorization reference. Technical public accessibility is not permission."
+      ],
+      "discovery_error": "SourceAuthorizationRequired"
+    },
+    {
+      "source_id": "anthem-ca-public",
+      "official_source_url": "https://www.anthem.com/ca/provider/policies/clinical-guidelines/?cnslocale=en_US_ca",
+      "source_type": "Regional HTML policy directory",
+      "discovery_succeeded": true,
+      "document_retrieved": false,
+      "usable_rule_extracted": false,
+      "plan_jurisdiction_verified": false,
+      "complete_claim_check": false,
+      "limitations": [
+        "California affiliate only. Generic BCBS identity cannot select this source. Publisher robots restrictions may prevent automated policy/PDF retrieval; no bypass is attempted."
+      ],
+      "policies_discovered": 98,
+      "sample_document_url": "https://www.anthem.com/docs/public/inline/CLAIMS_CA_00001.pdf",
+      "document_error": "Automated access is disallowed by the publisher's robots.txt."
+    },
+    {
+      "source_id": "cms-api",
+      "official_source_url": "https://api.coverage.cms.gov/docs/",
+      "source_type": "Documented JSON API",
+      "discovery_succeeded": true,
+      "document_retrieved": true,
+      "usable_rule_extracted": false,
+      "plan_jurisdiction_verified": false,
+      "complete_claim_check": false,
+      "limitations": [
+        "Original Medicare only; NCD metadata does not identify every billing code. LCD applicability requires verified MAC jurisdiction and associated billing articles. Licensed endpoints require an operator-supplied token."
+      ],
+      "policies_discovered": 1301,
+      "sample_document_url": "https://api.coverage.cms.gov/v1/data/ncd/?ncdid=285&ncdver=1",
+      "extracted_text_characters": 5018,
+      "document_title": "Arthroscopic Lavage and Arthroscopic Debridement for the Osteoarthritic Knee",
+      "rule_gap": "Text retrieval is not a verified coverage rule; exact code/plan/region/effect/evidence require human review.",
+      "lcd_metadata_error": "Official policy request returned HTTP 401; no bypass attempted."
+    }
+  ]
+}

@@ -132,6 +132,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
 
       const res = await uploadPatientFile({
         specialty: clinical.specialty,
+        policy_environment: analysisResult.policy_environment || 'official',
         patient_text: clinical.patient_name ? `Patient ${clinical.patient_name}` : 'Intake patient',
         prescription_text: firstItem.name,
         insurer_id: card.insurer_id,
@@ -209,7 +210,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <div className="text-xs text-amber-900 leading-relaxed">
-                <span className="font-bold">Privacy Safeguard & Synthetic Data Notice:</span> This hackathon environment processes synthetic patient test fixtures only. Text redaction is partial. Uploaded images are not de-identified and may be sent to Gemini. Synthetic review records are saved locally. Do not submit live unredacted Protected Health Information (PHI).
+                <span className="font-bold">Privacy Safeguard & Synthetic Data Notice:</span> This hackathon environment processes synthetic patient test fixtures only. Text redaction is partial. Clinical documents stay local and are not sent to external AI. Synthetic review records are saved locally. Do not submit live unredacted Protected Health Information (PHI).
               </div>
             </div>
 
@@ -363,7 +364,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
               <div className="space-y-4 pt-2 animate-in fade-in duration-200">
                 <div className="flex items-center justify-between border-b border-[#E8EFEA] pb-2">
                   <h3 className="font-bold text-xs uppercase tracking-wider text-[#698579]">
-                    Coverage Pre-Check Audit Determination
+                    Pre-submission findings for employee review
                   </h3>
                   <span
                     className={`px-3 py-1 rounded-full text-xs font-bold ${
@@ -374,7 +375,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                         : 'bg-red-50 text-red-700 border border-red-200'
                     }`}
                   >
-                    Status: {analysisResult.check_result.status}
+                    Status: {analysisResult.check_result.status === 'Approved' ? 'No issue detected under checked rules' : analysisResult.check_result.status === 'Missing or wrong info' ? 'Unable to verify / missing information' : 'Needs attention'}
                   </span>
                 </div>
 
@@ -504,7 +505,7 @@ export const UploadPatientFileModal: React.FC<UploadPatientFileModalProps> = ({
                         {isIssue && verdict.why_not_approved && (
                           <div className="mt-2.5 p-3 rounded-lg bg-white/80 border border-amber-200/60 text-xs text-[#92400E] space-y-1.5">
                             <div className="font-bold text-amber-900">
-                              Reason Not Approved Under Active Rules:
+                              Finding under checked rules:
                             </div>
                             <p>{verdict.why_not_approved}</p>
 

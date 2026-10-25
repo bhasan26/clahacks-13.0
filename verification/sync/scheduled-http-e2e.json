@@ -1,0 +1,11 @@
+{
+  "transport": "real HTTP",
+  "backend_scheduler": true,
+  "interval_seconds": 2,
+  "explicit_sync_calls": 0,
+  "hospital_claims": 40,
+  "baseline_policies": 5,
+  "restriction_detected_automatically": true,
+  "delay_detected_automatically": true,
+  "unrelated_authorization_retained": true
+}

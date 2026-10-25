@@ -170,7 +170,8 @@ def extract_policies_with_gemini(
                 for item in changes:
                     proposal = _map_dict_to_proposal(item, doc_id, filename, pages, raw_text)
                     proposal.extraction_method = "gemini"
-                    proposal.is_synthetic = "synthetic" in raw_text.lower()
+                    proposal.is_synthetic = "synthetic" in raw_text.lower() or proposal.insurer_id == "demo-insurer"
+                    proposal.scope_verified = proposal.is_synthetic
                     proposal.source_url = document_data.get("source_url")
                     proposals.append(proposal)
 
@@ -257,6 +258,7 @@ def _map_dict_to_proposal(
         policy_reference = None
 
     proposal_data: Dict[str, Any] = {
+        "scope_verified": False,
         "proposal_id": f"PROP-{uuid.uuid4().hex[:6].upper()}",
         "document_id": doc_id,
         "document_name": filename,
@@ -359,7 +361,8 @@ def _deterministic_fallback_extractor(document_data: Dict[str, Any]) -> List[Pro
                     change_type=change, policy_title=title)
         p = _map_dict_to_proposal(item, document_data.get("document_id", "DOC-TEXT"), document_data.get("filename", "notice.txt"), document_data.get("pages", []), raw)
         p.extraction_method = "deterministic"
-        p.is_synthetic = "synthetic" in raw.lower()
+        p.is_synthetic = "synthetic" in raw.lower() or p.insurer_id == "demo-insurer"
+        p.scope_verified = p.is_synthetic
         p.source_url = document_data.get("source_url")
         p.validation_warnings.append("Conservative text parser; reviewer must verify every field against the original document.")
         proposals.append(p)

@@ -27,6 +27,7 @@ INSURER_ALIASES: Dict[str, Set[str]] = {
     "aetna": {"aetna", "aetna_health", "aetna-health", "aetna health"},
     "bcbs": {"bcbs", "blue_cross", "blue-cross", "blue cross blue shield", "blue cross"},
     "cigna": {"cigna", "cigna_healthcare", "cigna healthcare"},
+    "bcbs-anthem-ca": {"bcbs-anthem-ca", "anthem-ca", "anthem blue cross california"},
     "cms": {"cms", "medicare", "centers for medicare & medicaid services"},
 }
 
@@ -210,8 +211,20 @@ def match_proposal_to_rule(
     if not match_insurer(proposal.insurer_id, rule.insurer_id):
         return False
 
+    if {x.upper() for x in proposal.jurisdictions} != {x.upper() for x in rule.jurisdictions}:
+        return False
+    if proposal.code_system != rule.target.code_system:
+        return False
     # A scope change creates a separate rule; it cannot version another plan's rule.
     if not proposal.plan_ids or {p.strip().upper() for p in proposal.plan_ids} != {p.strip().upper() for p in rule.plan_ids}:
         return False
 
     return True
+
+
+def match_jurisdiction(rule_regions, claim_region):
+    if not rule_regions:
+        return True  # Legacy rules; catalog rules require explicit verified regions.
+    if not claim_region or claim_region.upper() in {"UNKNOWN", "*"}:
+        return False
+    return claim_region.upper() in {r.upper() for r in rule_regions} or "US" in rule_regions or "*" in rule_regions
