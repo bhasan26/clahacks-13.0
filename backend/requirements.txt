@@ -1,0 +1,10 @@
+# Dependencies already used by the application; local OCR needs no API key.
+fastapi==0.162.0
+uvicorn
+httpx==0.28.1
+python-multipart==0.0.32
+pymupdf==1.28.2
+Pillow==12.3.0
+beautifulsoup4==4.15.0
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.31.0

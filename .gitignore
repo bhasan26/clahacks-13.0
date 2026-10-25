@@ -17,3 +17,8 @@ dist/
 
 # OS
 .DS_Store
+
+# Local databases, runtime files, and temporary renders
+backend/data/
+tmp/
+.ruff_cache/

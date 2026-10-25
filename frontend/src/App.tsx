@@ -1,254 +1,77 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
-import { DashboardPage } from './components/DashboardPage';
+import { NewCheckPage } from './components/NewCheckPage';
 import { CasesPage } from './components/CasesPage';
 import { UpdatesPage } from './components/UpdatesPage';
-import { CaseDetailModal } from './components/CaseDetailModal';
-import { UploadPatientFileModal } from './components/UploadPatientFileModal';
-import { DemoControlDock } from './components/DemoControlDock';
-import {
-  fetchDashboard,
-  fetchCases,
-  fetchCaseDetail,
-  fetchUpdates,
-  fetchConnection,
-  triggerRunCheckNow,
-  updateCleanClaimsTarget,
-  toggleCheckFailure,
-  resetDemoState,
-} from './api';
-import {
-  DashboardData,
-  Case,
-  CaseCheckResult,
-  InsurerUpdateEntry,
-  InsurerConnectionInfo,
-} from './types';
+import { ResultPanel } from './components/ResultPanel';
+import { fetchConnection, fetchReport, fetchRequests, fetchUpdates } from './api';
+import type { Page, CheckReport, Connection, PolicyUpdate, RequestSummary } from './types';
 
-export function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'cases' | 'updates'>('dashboard');
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [cases, setCases] = useState<Case[]>([]);
-  const [updates, setUpdates] = useState<InsurerUpdateEntry[]>([]);
-  const [connection, setConnection] = useState<InsurerConnectionInfo | null>(null);
-
-  // Filter pass-through from dashboard or updates to cases
-  const [initialStatusFilter, setInitialStatusFilter] = useState<string>('All');
-  const [initialSpecialtyFilter, setInitialSpecialtyFilter] = useState<string>('All');
-
-  // Case Detail Modal
-  const [selectedCaseData, setSelectedCaseData] = useState<Case | null>(null);
-  const [selectedCaseResult, setSelectedCaseResult] = useState<CaseCheckResult | null>(null);
-
-  // Upload Modal
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
-
-  // Toast
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
-  };
-
-  const loadAll = async () => {
-    try {
-      const [dash, cs, ups, conn] = await Promise.all([
-        fetchDashboard(),
-        fetchCases(),
-        fetchUpdates(),
-        fetchConnection(),
-      ]);
-      setDashboardData(dash);
-      setCases(cs);
-      setUpdates(ups);
-      setConnection(conn);
-    } catch (err) {
-      console.error('Failed to load application data', err);
-    }
-  };
-
+const pages: Page[] = ['check', 'requests', 'connection', 'updates'];
+function currentPage(): Page {
+  const hash = window.location.hash.slice(1) as Page;
+  return pages.includes(hash) ? hash : 'check';
+}
+function ReportDialog({ report, close }: { report: CheckReport; close: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    loadAll();
-    const interval = setInterval(async () => {
-      // Periodic background poll
-      try {
-        const [dash, conn] = await Promise.all([fetchDashboard(), fetchConnection()]);
-        setDashboardData(dash);
-        setConnection(conn);
-      } catch (err) {
-        // silent background poll error
-      }
-    }, 5000);
-    return () => clearInterval(interval);
+    dialog.current?.showModal();
+    return () => dialog.current?.close();
   }, []);
-
-  const handleOpenCase = async (caseId: string) => {
-    try {
-      const detail = await fetchCaseDetail(caseId);
-      setSelectedCaseData(detail.case);
-      setSelectedCaseResult(detail.check_result);
-    } catch (err) {
-      showToast('Could not load case detail');
-    }
-  };
-
-  const handleCloseCaseModal = () => {
-    setSelectedCaseData(null);
-    setSelectedCaseResult(null);
-  };
-
-  const handleNavigateToCasesWithFilter = (status?: string, specialty?: string) => {
-    setInitialStatusFilter(status || 'All');
-    setInitialSpecialtyFilter(specialty || 'All');
-    setActiveTab('cases');
-  };
-
-  const handleViewAffectedCases = (caseIds: string[]) => {
-    // When clicking "Affects N open cases", navigate to Cases
-    setInitialStatusFilter('Needs attention');
-    setInitialSpecialtyFilter('All');
-    setActiveTab('cases');
-    showToast(`Filtered to open cases affected by policy update (${caseIds.join(', ')})`);
-  };
-
-  const handleUpdateTarget = async (target: number) => {
-    try {
-      await updateCleanClaimsTarget(target);
-      showToast(`Target updated to ${target}%`);
-      const dash = await fetchDashboard();
-      setDashboardData(dash);
-    } catch (err) {
-      showToast('Failed to update target');
-    }
-  };
-
-  const handleRunCheckNow = async () => {
-    try {
-      const res = await triggerRunCheckNow();
-      showToast(res.message || 'Check complete: 3 open cases moved to Needs attention.');
-      await loadAll();
-    } catch (err) {
-      showToast('Failed to run check now');
-    }
-  };
-
-  const handleToggleFail = async () => {
-    try {
-      const res = await toggleCheckFailure();
-      showToast(
-        res.is_check_failed
-          ? 'Simulated check failure: chip set to Check pending.'
-          : 'Check restored: chip set to Access active.'
-      );
-      const conn = await fetchConnection();
-      setConnection(conn);
-    } catch (err) {
-      showToast('Failed to toggle check failure');
-    }
-  };
-
-  const handleResetDemo = async () => {
-    try {
-      await resetDemoState();
-      setInitialStatusFilter('All');
-      setInitialSpecialtyFilter('All');
-      showToast('Demo state reset to initial 40 cases.');
-      await loadAll();
-    } catch (err) {
-      showToast('Failed to reset demo');
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-white text-[#092328] flex antialiased selection:bg-[#8BBB92]/20">
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-6 right-6 z-50 animate-in slide-in-from-top duration-200">
-          <div className="bg-[#092328] text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-xl border border-[#12544F]">
-            {toastMessage}
-          </div>
-        </div>
-      )}
-
-      {/* Professional Vertical Sidebar Navigation */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={(tab) => {
-          setInitialStatusFilter('All');
-          setInitialSpecialtyFilter('All');
-          setActiveTab(tab);
-        }}
-        connection={connection}
-        onRunCheckNow={handleRunCheckNow}
-        onToggleFail={handleToggleFail}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-screen">
-        {/* If the last check failed, a one-line banner appears that rules may be out of date */}
-        {connection?.is_check_failed && (
-          <div className="bg-[#FEF3C7] border-b border-[#F59E0B]/30 px-8 py-2 text-center text-xs font-semibold text-[#92400E]">
-            Rules may be out of date. Re-check in progress.
-          </div>
-        )}
-
-        {/* Page Routing */}
-        <main className="flex-1 pb-24">
-          {activeTab === 'dashboard' && (
-            <DashboardPage
-              data={dashboardData}
-              onNavigateToUpdates={() => setActiveTab('updates')}
-              onNavigateToCasesWithFilter={handleNavigateToCasesWithFilter}
-              onUpdateTarget={handleUpdateTarget}
-            />
-          )}
-
-          {activeTab === 'cases' && (
-            <CasesPage
-              cases={cases}
-              onSelectCase={handleOpenCase}
-              onOpenUploadModal={() => setIsUploadOpen(true)}
-              initialStatusFilter={initialStatusFilter}
-              initialSpecialtyFilter={initialSpecialtyFilter}
-            />
-          )}
-
-          {activeTab === 'updates' && (
-            <UpdatesPage
-              updates={updates}
-              onViewAffectedCases={handleViewAffectedCases}
-            />
-          )}
-        </main>
-      </div>
-
-      {/* Page 3: Case Detail Modal */}
-      <CaseDetailModal
-        caseData={selectedCaseData}
-        checkResult={selectedCaseResult}
-        onClose={handleCloseCaseModal}
-      />
-
-      {/* Upload Patient File Modal */}
-      <UploadPatientFileModal
-        isOpen={isUploadOpen}
-        onClose={() => setIsUploadOpen(false)}
-        onCaseCreated={(newCase) => {
-          showToast(`Case ${newCase.case_id} uploaded and checked!`);
-          loadAll();
-          handleOpenCase(newCase.case_id);
-        }}
-      />
-
-      {/* 1-Click Floating Control Bar for Demo / Testing */}
-      <DemoControlDock
-        onRunCheckNow={handleRunCheckNow}
-        onToggleFail={handleToggleFail}
-        onReset={handleResetDemo}
-      />
-    </div>
-  );
+  return <dialog ref={dialog} onCancel={close} onClick={event => { if (event.target === event.currentTarget) close(); }} className="m-auto bg-white border border-[#D8E5DC] rounded-3xl w-[calc(100%-2rem)] max-w-2xl max-h-[90vh] p-6 shadow-2xl backdrop:bg-[#092328]/40 backdrop:backdrop-blur-xs text-[#092328]">
+    <div className="flex justify-between gap-3 items-center mb-5"><h2 className="text-sm font-black">Report · {report.request_id}</h2><button onClick={close} aria-label="Close report" className="p-2 hover:bg-[#F0F5F2] rounded-lg cursor-pointer"><X className="w-4 h-4" /></button></div>
+    <ResultPanel report={report} />
+  </dialog>;
 }
 
+export function App() {
+  const [page, setPage] = useState<Page>(currentPage);
+  const [requests, setRequests] = useState<RequestSummary[]>([]);
+  const [updates, setUpdates] = useState<PolicyUpdate[]>([]);
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [selected, setSelected] = useState<CheckReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const onHashChange = () => setPage(currentPage());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    setError(''); setLoading(page !== 'check');
+    async function load() {
+      try {
+        if (page === 'requests') { const data = await fetchRequests(); if (active) setRequests(data); }
+        if (page === 'updates') { const data = await fetchUpdates(); if (active) setUpdates(data); }
+        if (page === 'connection') { const data = await fetchConnection(); if (active) setConnection(data); }
+      } catch (err) { if (active) setError(err instanceof Error ? err.message : 'Could not load the page.'); }
+      finally { if (active) setLoading(false); }
+    }
+    load();
+    return () => { active = false; };
+  }, [page]);
+  async function openReport(id: string) {
+    setError('');
+    try { setSelected(await fetchReport(id)); }
+    catch { setError('Could not open the report.'); }
+  }
+  function navigate(next: Page) { window.location.hash = next; setPage(next); setSelected(null); }
+  return <div className="min-h-screen bg-white text-[#092328] flex flex-col md:flex-row antialiased selection:bg-[#8BBB92]/20">
+    <Sidebar page={page} navigate={navigate} />
+    <main className="flex-1 min-w-0"><div className="max-w-6xl mx-auto py-8 px-6 pb-16">
+      {error && <p role="alert" className="text-xs text-[#DC2626] mb-5">{error}</p>}
+      <div hidden={page !== 'check'}><NewCheckPage /></div>
+      {page !== 'check' && (loading ? <p role="status" className="text-xs text-[#12544F]/70">Loading…</p> : !error && <>
+        {page === 'requests' && <CasesPage requests={requests} openReport={openReport} />}
+        {page === 'updates' && <UpdatesPage updates={updates} />}
+        {page === 'connection' && connection && <div className="space-y-6"><h1 className="text-xl font-black tracking-tight">Insurance Database Connection</h1><section className="bg-white border border-[#D8E5DC] rounded-2xl p-6 shadow-sm space-y-5 max-w-2xl"><dl className="space-y-5 text-xs">
+          {[['Connection status', connection.status], ['Insurance company / database', connection.database_name], ['Access mode', connection.access_mode], ['Permission', connection.permission]].map(([label, value]) => <div key={label} className="flex flex-wrap justify-between gap-2 border-b border-[#EAEFEA] pb-4 last:border-0 last:pb-0"><dt className="text-[#12544F]/70">{label}</dt><dd className={`font-bold ${label === 'Connection status' ? 'text-[#2A835F]' : ''}`}>{value}</dd></div>)}
+        </dl><p className="text-xs text-[#12544F]/70 border-t border-[#EAEFEA] pt-4">{connection.description}</p></section></div>}
+      </>)}
+    </div></main>
+    {selected && <ReportDialog report={selected} close={() => setSelected(null)} />}
+  </div>;
+}
 export default App;
