@@ -1,15 +1,8 @@
 import {
-  DashboardData,
   Case,
   CaseDetailResponse,
   InsurerUpdateEntry,
-  InsurerConnectionInfo,
-  HealthStatus,
-  CaseSummary,
   Alert,
-  Rule,
-  AuditEntry,
-  CaseCheckResult,
   IntakeAnalysisResult,
   ReviewedIntakeClaim,
   PolicyBulletin,
@@ -34,12 +27,6 @@ async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
 // New Clean Specification API Methods
 // -------------------------------------------------------------
 
-export async function fetchDashboard(): Promise<DashboardData> {
-  const res = await apiFetch(`${API_BASE}/dashboard`);
-  if (!res.ok) throw new Error('Failed to fetch dashboard metrics');
-  return res.json();
-}
-
 export async function fetchCases(status?: string, specialty?: string): Promise<Case[]> {
   const params = new URLSearchParams();
   if (status && status !== 'All') params.set('status', status);
@@ -57,7 +44,7 @@ export async function fetchCaseDetail(caseId: string): Promise<CaseDetailRespons
 }
 
 export async function analyzeIntake(data: {
-  policy_environment?: "official" | "demo";
+  policy_environment?: "auto" | "official" | "demo";
   reviewed_claim?: Partial<ReviewedIntakeClaim>;
   sample_id?: string;
   card_image_b64?: string;
@@ -67,6 +54,7 @@ export async function analyzeIntake(data: {
   selected_insurer_id?: string;
   selected_insurer_name?: string;
   selected_plan_id?: string;
+  refresh_sources?: boolean;
 }): Promise<IntakeAnalysisResult> {
   const res = await apiFetch(`${API_BASE}/intake/analyze`, {
     method: 'POST',
@@ -115,46 +103,18 @@ export async function uploadPatientFile(data: {
   return res.json();
 }
 
+export async function clearUploadedClaims(): Promise<{ removed: number }> {
+  const res = await apiFetch(`${API_BASE}/claims/uploads`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Unable to clear uploaded claims.');
+  return res.json();
+}
+
 export async function fetchUpdates(itemType?: string): Promise<InsurerUpdateEntry[]> {
   const params = new URLSearchParams();
   if (itemType && itemType !== 'All') params.set('item_type', itemType.toLowerCase());
 
   const res = await apiFetch(`${API_BASE}/updates?${params.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch insurer updates');
-  return res.json();
-}
-
-export async function fetchConnection(): Promise<InsurerConnectionInfo> {
-  const res = await apiFetch(`${API_BASE}/connection`);
-  if (!res.ok) throw new Error('Failed to fetch connection info');
-  return res.json();
-}
-
-export async function triggerRunCheckNow(): Promise<any> {
-  const res = await apiFetch(`${API_BASE}/check/run-now`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to run check now');
-  return res.json();
-}
-
-export async function updateCleanClaimsTarget(target: number): Promise<any> {
-  const res = await apiFetch(`${API_BASE}/settings/target`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target }),
-  });
-  if (!res.ok) throw new Error('Failed to update target');
-  return res.json();
-}
-
-export async function toggleCheckFailure(): Promise<any> {
-  const res = await apiFetch(`${API_BASE}/connection/toggle-fail`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to toggle connection failure');
-  return res.json();
-}
-
-export async function resetDemoState(): Promise<any> {
-  const res = await apiFetch(`${API_BASE}/simulator/reset`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to reset demo state');
   return res.json();
 }
 
@@ -267,18 +227,8 @@ export async function fetchExtractedDocument(docId: string): Promise<ExtractedDo
 }
 
 // -------------------------------------------------------------
-// Backward Compatibility Methods
+// Alerts
 // -------------------------------------------------------------
-
-export async function fetchHealth(): Promise<HealthStatus> {
-  const res = await apiFetch(`${API_BASE}/health`);
-  if (!res.ok) throw new Error('Failed to fetch health');
-  return res.json();
-}
-
-export async function fetchRules(): Promise<Rule[]> {
-  return [];
-}
 
 export async function fetchAlerts(status?: string): Promise<Alert[]> {
   const url = status ? `${API_BASE}/alerts?status=${encodeURIComponent(status)}` : `${API_BASE}/alerts`;
@@ -308,91 +258,6 @@ export async function updateAlertTask(
   return res.json();
 }
 
-export async function acknowledgeAlert(alertId: string, note?: string): Promise<any> {
-  const res = await apiFetch(`${API_BASE}/alerts/${alertId}/acknowledge`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ officer_note: note }),
-  });
-  if (!res.ok) throw new Error('Failed to acknowledge alert');
-  return res.json();
-}
-
-export async function generateAlertDraft(alertId: string): Promise<{
-  success: boolean;
-  alert_id: string;
-  case_id: string;
-  draft_message: string;
-  disclaimer: string;
-}> {
-  const res = await apiFetch(`${API_BASE}/alerts/${alertId}/draft`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to generate draft message');
-  return res.json();
-}
-
-export async function triggerSync(): Promise<any> {
-  return triggerRunCheckNow();
-}
-
-export async function recheckCase(caseId: string): Promise<CaseCheckResult> {
-  const detail = await fetchCaseDetail(caseId);
-  return detail.check_result;
-}
-
-export async function fetchConnectionInfo(): Promise<InsurerConnectionInfo> {
-  return fetchConnection();
-}
-
-export async function updateDetailLevel(level: 'minimal' | 'excerpt'): Promise<any> {
-  return { success: true, detail_level: level };
-}
-
-export async function simulateInsurerRevoke(): Promise<any> {
-  return toggleCheckFailure();
-}
-
-export async function simExcludeDrugA(): Promise<any> {
-  return triggerRunCheckNow();
-}
-
-export async function simDelayDrugA(): Promise<any> {
-  return { success: true };
-}
-
-export async function simCancelDrugA(): Promise<any> {
-  return { success: true };
-}
-
-export async function simToggleOutage(): Promise<any> {
-  return toggleCheckFailure();
-}
-
-export async function simReset(): Promise<any> {
-  return resetDemoState();
-}
-
-export async function extractCaseFromText(text: string): Promise<any> {
-  return {
-    case: {
-      case_id: 'C-EXT',
-      specialty: 'Cardiology',
-      service_date: '2026-11-15',
-      items: [{ type: 'drug', code: 'DRUG-A', name: 'Drug A' }],
-      documents: [],
-    },
-    meta: { extractor_used: 'regex-engine', extraction_confidence: 0.95 },
-  };
-}
-
-export async function createCase(caseData: any): Promise<any> {
-  return uploadPatientFile({
-    specialty: caseData.specialty || 'Cardiology',
-    patient_text: 'Clinical Record',
-    item_code: caseData.items?.[0]?.code || 'DRUG-A',
-    item_name: caseData.items?.[0]?.name || 'Drug A',
-  });
-}
-
 // -------------------------------------------------------------
 // Official External Policy Sources & Demo Mode (Feature 8)
 // -------------------------------------------------------------
@@ -410,13 +275,6 @@ export async function checkOfficialSource(sourceId?: string): Promise<SourceChec
     body: JSON.stringify({ source_id: sourceId }),
   });
   if (!res.ok) throw new Error('Failed to check official policy source');
-  return res.json();
-}
-
-export async function fetchSourceHistory(sourceId?: string): Promise<SourceCheckHistory[]> {
-  const url = sourceId ? `${API_BASE}/sources/history?source_id=${encodeURIComponent(sourceId)}` : `${API_BASE}/sources/history`;
-  const res = await apiFetch(url);
-  if (!res.ok) throw new Error('Failed to fetch source check history');
   return res.json();
 }
 

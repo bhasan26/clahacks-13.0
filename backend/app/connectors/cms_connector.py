@@ -103,6 +103,9 @@ class CMSCoverageConnector(InsurerPolicyConnector):
                         requires_billing_articles=kind == "LCD",
                         metadata={
                             "publisher_document_url": row.get("url"),
+                            # Human-readable Medicare Coverage Database page for staff; fetches use the API.
+                            "publisher_page_url": f"https://www.cms.gov/medicare-coverage-database/view/{kind.lower()}.aspx?"
+                            + urlencode(params),
                             "contractor": row.get("contractor_name_type"),
                             "jurisdiction_verified": False if kind == "LCD" else None,
                         },

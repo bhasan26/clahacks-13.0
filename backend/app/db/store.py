@@ -35,14 +35,13 @@ def transactional(method):
             raise
     return wrapped
 
-from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
+from datetime import date, timedelta
+from typing import Dict, List, Optional
 
 from app.domain.models import (
     Alert,
     Case,
     CaseItem,
-    CaseStatusType,
     Diagnosis,
     ExtractedDocumentResult,
     InsurerConnectionInfo,
@@ -874,10 +873,22 @@ class DataStore:
         # Validate a copy: a rejected edit must not partially mutate stored evidence.
         allowed = {"insurer_id", "insurer_name", "plan_ids", "target_type", "target_code", "target_name",
                    "policy_title", "policy_reference", "proposed_effect", "effective_from", "effective_to",
-                   "conditions", "change_type", "evidence_confirmed_by_reviewer", "jurisdictions", "code_system", "scope_verified", "billing_articles_verified"}
+                   "conditions", "change_type", "evidence_confirmed_by_reviewer", "jurisdictions", "code_system", "scope_verified", "billing_articles_verified",
+                   "supporting_quote"}
         edits = edited_fields or {}
         if set(edits) - allowed:
             raise ValueError("Unsupported reviewer correction field.")
+        if "supporting_quote" in edits and edits["supporting_quote"] != proposal.supporting_quote:
+            # A reviewer may choose the governing sentence, but only verbatim from the stored source.
+            from app.intelligence.evidence_validator import verify_evidence_in_document
+            document = self.extracted_documents.get(proposal.document_id)
+            verified, page, _, _ = (
+                verify_evidence_in_document(edits["supporting_quote"], document.pages_text, document.raw_text)
+                if document else (False, 1, None, "")
+            )
+            if not verified:
+                raise ValueError("The evidence quote must appear word for word in the stored source document.")
+            edits = {**edits, "evidence_verified": True, "source_page": page}
         proposal = ProposedPolicyChange.model_validate({**proposal.model_dump(), **edits})
         if proposal.evidence_confirmed_by_reviewer and not reviewer_notes:
             raise ValueError("Record how the original evidence was visually verified in reviewer notes.")

@@ -9,7 +9,7 @@ Verifies:
 
 from datetime import date
 from app.db.store import store
-from app.domain.models import Case, CaseItem, Rule, RuleCategory, RuleEffect, RuleStatus, Target
+from app.domain.models import Rule, RuleCategory, RuleEffect, RuleStatus, Target
 from app.engine.checker import evaluate_case
 
 

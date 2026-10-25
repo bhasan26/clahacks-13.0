@@ -12,11 +12,20 @@ _process_lock = None
 _scheduler_owns_lock = False
 
 
+def _default_worker_lock_path() -> Path:
+    # The lock guards one state file, so processes sharing a state path share a lock
+    # and isolated workspaces (distinct state paths) can run side by side.
+    state_path = os.environ.get("COVERAGEGUARD_STATE_PATH")
+    if state_path:
+        return Path(state_path + ".lock")
+    return Path(__file__).resolve().parents[2] / "data" / "worker.lock"
+
+
 def acquire_worker_lock():
     global _process_lock
     if _process_lock is not None:
         return
-    path = Path(os.environ.get("COVERAGEGUARD_WORKER_LOCK", str(Path(__file__).resolve().parents[2] / "data" / "worker.lock")))
+    path = Path(os.environ.get("COVERAGEGUARD_WORKER_LOCK") or _default_worker_lock_path())
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a")
     try:

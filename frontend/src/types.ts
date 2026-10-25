@@ -93,10 +93,21 @@ export interface ReviewedIntakeClaim {
   items: Array<{ type: string; code: string; code_system?: string | null; name?: string | null; quantity?: number }>;
 }
 
+export interface PendingPolicyChange {
+  proposal_id: string; policy_reference?: string | null; change_type?: string | null;
+  proposed_effect?: string | null; effective_from?: string | null; detected_at: string;
+  is_synthetic: boolean; supporting_quote?: string; source_url?: string | null;
+}
+
+export interface RulesRefreshResult {
+  source_id: string; name: string; status: string; checked_at?: string | null;
+  changed?: number; error?: string | null;
+}
+
 export interface ClaimFindingsReport {
   case_id: string; insurer_id: string; insurer_name?: string | null; plan_id: string;
   member_ref?: string; jurisdiction?: string | null; service_date?: string | null;
-  status: string; policy_environment: 'official' | 'demo'; notice: string;
+  status: string; policy_environment: 'official' | 'demo'; notice: string; is_uploaded?: boolean; pending_changes_count?: number;
   validation_warnings?: string[]; coverage_gaps: string[];
   findings: Array<ItemVerdict & {
     policy_reference?: string | null; policy_version?: number | null;
@@ -104,6 +115,7 @@ export interface ClaimFindingsReport {
     required_documents: string[]; missing_documents: string[];
     requires_prior_authorization: boolean; prior_authorization_present: boolean;
     prior_authorization_reference?: string | null; policy_missing_reason?: string | null;
+    pending_changes?: PendingPolicyChange[]; policy_checked_at?: string | null;
     follow_up: string;
   }>;
 }
@@ -113,6 +125,7 @@ export interface IntakeAnalysisResult {
   findings: ClaimFindingsReport;
   missing_fields: Array<{field: string; message: string}>;
   validation_warnings: string[];
+  rules_refresh?: RulesRefreshResult[];
   extraction_method: string;
   privacy_notice: string;
   policy_environment?: string;

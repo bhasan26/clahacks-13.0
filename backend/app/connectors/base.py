@@ -4,7 +4,7 @@ Base connector interface for official external policy sources.
 
 import hashlib
 from abc import ABC, abstractmethod
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict
 
 
 class SourceError(Exception):

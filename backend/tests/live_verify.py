@@ -5,9 +5,7 @@ Network access and GEMINI_API_KEY are required for the relevant live checks.
 """
 import json
 import os
-from pathlib import Path
 from datetime import date
-from tempfile import TemporaryDirectory
 
 # Isolate verification from the application's local checkpoint and caseload.
 os.environ["COVERAGEGUARD_STATE_PATH"] = ""

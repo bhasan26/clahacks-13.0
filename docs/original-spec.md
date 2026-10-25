@@ -1,7 +1,3 @@
- على الوثيقة الجزئية، فتجاهلها أو احذفها.
-
----
-
 # Coverage Check Agent: Hackathon Build Draft
 
 ## 1. Executive summary

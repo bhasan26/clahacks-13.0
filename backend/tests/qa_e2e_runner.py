@@ -23,7 +23,6 @@ os.environ["COVERAGEGUARD_DISABLE_AI"] = "true"
 
 from fastapi.testclient import TestClient
 from app.main import app
-from app.db.store import store
 
 client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 

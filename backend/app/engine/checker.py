@@ -16,7 +16,6 @@ from app.domain.models import (
     CaseCheckResult,
     CaseItem,
     CaseStatusType,
-    ItemResultType,
     ItemVerdict,
     Rule,
     RuleEffect,
@@ -30,7 +29,7 @@ def format_date_plain(d: Optional[date]) -> str:
     return d.strftime("%-d %b %Y")
 
 
-from app.engine.matcher import match_insurer, match_plan, match_item_code, normalize_insurer_id, match_jurisdiction
+from app.engine.matcher import match_insurer, match_plan, match_item_code, match_code_system, normalize_insurer_id, match_jurisdiction
 
 
 def normalize_insurer(ins: Optional[str]) -> str:
@@ -68,6 +67,21 @@ def rules_for_date(rules: List[Rule], service_date: date) -> List[Rule]:
         if key not in latest or r.version > latest[key].version:
             latest[key] = r
     return list(latest.values())
+
+
+DIAGNOSIS_CONDITION = "applies_to_diagnosis_prefixes"
+
+
+def _normalize_icd(code: Optional[str]) -> str:
+    return (code or "").replace(".", "").strip().upper()
+
+
+def diagnosis_condition_matches(rule: Rule, case: Case) -> Optional[bool]:
+    """None when the rule has no diagnosis condition or the claim lists no diagnosis."""
+    prefixes = [_normalize_icd(p) for p in (rule.conditions or {}).get(DIAGNOSIS_CONDITION) or []]
+    if not prefixes or not case.diagnoses:
+        return None
+    return any(_normalize_icd(d.code).startswith(p) for d in case.diagnoses for p in prefixes if p)
 
 
 def is_rule_applicable(
@@ -134,8 +148,10 @@ def check_item(
         and not (case.policy_environment == "official" and normalize_insurer_id(case.insurer_id) == "bcbs")
         and r.scope_verified and r.verification_status == "approved"
         and match_jurisdiction(r.jurisdictions, case.jurisdiction)
-        and (not r.target.code_system or r.target.code_system == item.code_system)
+        and match_code_system(r.target.code_system, item.code_system)
         and (case.policy_environment == "demo" or not r.is_synthetic)
+        # A diagnosis-scoped rule does not govern a claim whose diagnoses fall outside it.
+        and diagnosis_condition_matches(r, case) is not False
     ]
 
     best_rule, has_conflict = select_best_rule(applicable_rules, case.plan_id)
@@ -167,9 +183,22 @@ def check_item(
     b_summary = best_rule.bulletin_summary
     guidance = best_rule.action_guidance or [best_rule.source_ref]
 
+    prefixes = (best_rule.conditions or {}).get(DIAGNOSIS_CONDITION)
+    if prefixes and not case.diagnoses:
+        sentence = f"{best_rule.rule_id} applies to {item_display} only for diagnoses {', '.join(prefixes)}; this claim lists no diagnosis."
+        action = "Add the claim's ICD-10 diagnosis code and recheck."
+        return ItemVerdict(item=item, result="Value wrong", rule_id=best_rule.rule_id, rule_version=best_rule.version,
+            effective_date=eff_str, plain_sentence=sentence, rule_reference=rule_ref, what_to_do=action,
+            full_issue_text=f"{sentence} {rule_ref} {action}", source_title=src_title, source_url=src_url,
+            official_reference_url=official_ref, bulletin_summary=b_summary, action_guidance=[action])
+
     # 2. Excluded
     if best_rule.effect == RuleEffect.EXCLUDED:
-        sentence = f"{item_display} is not covered from {eff_str}."
+        sentence = (
+            f"{item_display} is not covered for the claim's diagnosis ({', '.join(d.code for d in case.diagnoses)}) from {eff_str}."
+            if prefixes
+            else f"{item_display} is not covered from {eff_str}."
+        )
         action = "Review with the physician before submitting."
         why = f"{item_display} is non-covered or excluded under policy {best_rule.rule_id} effective {eff_str}."
         return ItemVerdict(
@@ -249,7 +278,7 @@ def check_item(
                 action_guidance=guidance or [f"Obtain {docs_str} from medical records department and attach to claim file."],
             )
 
-    unsupported=set((best_rule.conditions or {})) - {"requires_prior_approval", "required_documents"}
+    unsupported=set((best_rule.conditions or {})) - {"requires_prior_approval", "required_documents", DIAGNOSIS_CONDITION}
     if unsupported or (best_rule.effect == RuleEffect.REQUIRES_DOCUMENTS and not (best_rule.conditions or {}).get("required_documents")):
         sentence=f"{item_display} has policy conditions that require employee verification."
         action="Verify the remaining clinical/benefit criteria against the source; do not assume coverage."

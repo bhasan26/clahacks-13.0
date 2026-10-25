@@ -9,10 +9,10 @@ Enforces 10MB file limit and extracts page-level text and previews.
 """
 
 import os
-import re
 import base64
+import importlib.util
 import uuid
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -181,11 +181,9 @@ def _process_pdf(file_bytes: bytes, filename: str, doc_id: str) -> Dict[str, Any
     Detects scanned pages and extracts embedded images or rendered previews for Gemini vision.
     Supports up to MAX_PDF_PAGES with warnings if truncated.
     """
-    try:
-        import fitz  # PyMuPDF
+    if importlib.util.find_spec("fitz") is not None:  # PyMuPDF
         return _process_pdf_with_fitz(file_bytes, filename, doc_id)
-    except ImportError:
-        return _process_pdf_with_pypdf(file_bytes, filename, doc_id)
+    return _process_pdf_with_pypdf(file_bytes, filename, doc_id)
 
 
 def _process_pdf_with_fitz(file_bytes: bytes, filename: str, doc_id: str) -> Dict[str, Any]:
@@ -334,7 +332,7 @@ def _process_pdf_with_pypdf(file_bytes: bytes, filename: str, doc_id: str) -> Di
                         "mime": mime,
                         "b64": img_b64,
                     })
-        except Exception as img_err:
+        except Exception:
             pass
 
         pages_data.append({

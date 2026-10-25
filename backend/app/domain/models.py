@@ -7,6 +7,7 @@ Matches the specification:
 - 40 Cases, 6 Updates
 """
 
+import re
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
@@ -115,8 +116,17 @@ class Case(BaseModel):
     documents: List[str] = Field(default_factory=list)
     prior_approval_ref: Optional[str] = None
     status: CaseStatusType = "Approved"
+    intake_source: Optional[Literal["patient_intake"]] = None  # set for claims filed via the intake form
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+_LEGACY_UPLOAD_ID = re.compile(r"^(?:UPLOAD-.+|C-[0-9A-F]{12})$")
+
+
+def is_uploaded_case(case: Case) -> bool:
+    """Claims filed through intake (older uploads are recognized by their generated IDs)."""
+    return case.intake_source == "patient_intake" or bool(_LEGACY_UPLOAD_ID.match(case.case_id))
 
 
 # Standard item-level results:

@@ -4,11 +4,9 @@ Compares proposed policy changes against currently approved rules in the databas
 identifying coverage restrictions, delayed dates, cancellations, and documentation updates.
 """
 
-from typing import List, Optional, Tuple
-from datetime import date
-from app.domain.models import ProposedPolicyChange, PolicyDiff, Rule, RuleEffect
+from typing import List, Optional
+from app.domain.models import ProposedPolicyChange, PolicyDiff, Rule
 from app.db.store import store
-from app.engine.matcher import match_proposal_to_rule
 from app.intelligence.rule_builder import find_prior
 
 

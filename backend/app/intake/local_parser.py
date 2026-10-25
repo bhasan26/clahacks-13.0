@@ -237,6 +237,11 @@ def parse_claim_text(text):
     }
 
 
+def infer_policy_environment(plan_id):
+    """Simulated insurer plans are namespaced DEMO-*; every other plan requires official evidence."""
+    return "demo" if (plan_id or "").strip().upper().startswith("DEMO-") else "official"
+
+
 def claim_missing_fields(case):
     """Fields required by this explicit, scoped patient intake workflow."""
     labels = {

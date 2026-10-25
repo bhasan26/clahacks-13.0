@@ -394,3 +394,99 @@ def test_pdf_matching_rejects_wrong_plan_region_system_or_similar_code(
     assert wrong["findings"]["status"].startswith("Unable")
     assert not wrong["findings"]["findings"][0]["policy_reference"]
     assert wrong["findings"]["findings"][0]["policy_missing_reason"]
+
+
+@pytest.mark.parametrize("plan,expected", [("DEMO-UHC-PPO", "demo"), ("demo-uhc-ppo", "demo"), ("UHC-CHOICE-PLUS", "official"), ("", "official")])
+def test_auto_policy_environment_follows_plan(plan, expected):
+    text = TEXT.replace("DEMO-UHC-PPO", plan) if plan else TEXT.replace("Plan ID: DEMO-UHC-PPO\n", "")
+    result = client.post("/api/intake/analyze", json={"clinical_text": text}).json()
+    assert result["policy_environment"] == expected
+    assert result["claim"]["policy_environment"] == expected
+
+
+def test_explicit_policy_environment_still_overrides_auto():
+    result = client.post("/api/intake/analyze", json={"clinical_text": TEXT, "policy_environment": "official"}).json()
+    assert result["policy_environment"] == "official"
+
+
+def test_refiling_the_same_claim_updates_instead_of_duplicating():
+    claim = client.post("/api/intake/analyze", json={"clinical_text": TEXT}).json()["claim"]
+    first = client.post("/api/cases/upload", json=claim).json()
+    second = client.post("/api/cases/upload", json={**claim, "documents": ["Operative note (synthetic)"]}).json()
+    assert first["updated"] is False and second["updated"] is True
+    assert second["case"]["case_id"] == first["case"]["case_id"]
+    assert second["case"]["policy_environment"] == "demo"
+    uploads = [c for c in store.cases.values() if c.intake_source == "patient_intake"]
+    assert len(uploads) == 1 and uploads[0].documents == ["Operative note (synthetic)"]
+    other_date = client.post("/api/cases/upload", json={**claim, "service_date": "2026-12-01"}).json()
+    assert other_date["updated"] is False and other_date["case"]["case_id"] != first["case"]["case_id"]
+
+
+def test_clear_uploaded_claims_keeps_imported_and_seeded_claims():
+    store.reset_state(True)
+    seeded = set(store.cases)
+    claim = client.post("/api/intake/analyze", json={"clinical_text": TEXT}).json()["claim"]
+    client.post("/api/cases/upload", json=claim)
+    store.cases["UPLOAD-legacy"] = store.cases[next(iter(seeded))].model_copy(update={"case_id": "UPLOAD-legacy"})
+    response = client.delete("/api/claims/uploads").json()
+    assert response["removed"] == 2
+    assert set(store.cases) == seeded
+
+
+def review_pending():
+    for proposal in list(store.proposals.values()):
+        if proposal.review_state == "pending_review":
+            response = client.post(
+                f"/api/policies/proposals/{proposal.proposal_id}/approve",
+                json={"reviewer_notes": "Verified synthetic scope, code, date and evidence."},
+            )
+            assert response.status_code == 200, response.text
+
+
+def test_check_latest_detects_unreviewed_change_and_warns_without_changing_finding(insurer_transport):
+    # Checking an unsaved claim fetches the policies relevant to it.
+    first = analyze(refresh_sources=True)
+    assert first["rules_refresh"][0]["changed"] >= 1
+    review_pending()
+    covered = analyze(refresh_sources=True)
+    finding = covered["findings"]["findings"][0]
+    assert finding["result"] == "Covered" and finding["pending_changes"] == []
+    assert finding["policy_checked_at"]
+    assert [r["source_id"] for r in covered["rules_refresh"]] == ["demo-insurer-api"]
+    assert covered["rules_refresh"][0]["status"] == "succeeded"
+
+    # The insurer publishes a restriction; nobody has synced or reviewed it yet.
+    assert client.post("/api/demo/publish-insurer", json={"scenario": "restriction"}).status_code == 200
+    checked = analyze(refresh_sources=True)
+    assert checked["rules_refresh"][0]["changed"] == 1
+    report = checked["findings"]
+    # The approved rule still governs, but the detected change is surfaced.
+    assert report["findings"][0]["result"] == "Covered"
+    assert report["pending_changes_count"] == 1
+    change = report["findings"][0]["pending_changes"][0]
+    assert change["proposed_effect"] == "excluded"
+    assert change["effective_from"] == "2026-11-01"
+    assert any("awaiting review" in gap for gap in report["coverage_gaps"])
+
+    # A saved claim shows the same warning until the change is reviewed.
+    saved = client.post("/api/cases/upload", json=checked["claim"]).json()["case"]["case_id"]
+    assert client.get(f"/api/claims/{saved}/findings").json()["pending_changes_count"] == 1
+    review_pending()
+    after = client.get(f"/api/claims/{saved}/findings").json()
+    assert after["findings"][0]["result"] == "Not covered" and after["pending_changes_count"] == 0
+
+
+def test_check_latest_for_official_claim_never_touches_simulated_source(insurer_transport):
+    result = analyze(policy_environment="official", refresh_sources=True)
+    assert all(r["source_id"] != "demo-insurer-api" for r in result["rules_refresh"])
+    uhc = [r for r in result["rules_refresh"] if r["source_id"] == "uhc-public"]
+    assert uhc and uhc[0]["status"] == "authorization_required"
+
+
+def test_pending_simulated_change_never_warns_an_official_claim(insurer_transport):
+    analyze(refresh_sources=True)
+    review_pending()
+    client.post("/api/demo/publish-insurer", json={"scenario": "restriction"})
+    analyze(refresh_sources=True)
+    assert analyze(policy_environment="official")["findings"]["pending_changes_count"] == 0
+    assert analyze()["findings"]["pending_changes_count"] == 1

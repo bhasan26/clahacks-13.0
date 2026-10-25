@@ -11,8 +11,7 @@ Validates:
 import pytest
 import io
 import pypdf
-from datetime import date, datetime
-from typing import Dict, Any, List
+from datetime import date
 
 from app.domain.models import (
     ProposedPolicyChange,
@@ -23,31 +22,22 @@ from app.domain.models import (
     RuleStatus,
     Case,
     CaseItem,
-    ItemVerdict,
-    CaseCheckResult,
 )
 from app.engine.matcher import (
-    normalize_code,
-    match_insurer,
-    match_plan,
     match_proposal_to_target,
-    match_proposal_to_rule,
     is_rule_applicable_on_date,
 )
 from app.engine.checker import evaluate_case
 from app.intelligence.policy_extractor import (
     extract_policies_with_gemini,
-    _deterministic_fallback_extractor,
     _map_dict_to_proposal,
 )
 from app.intelligence.evidence_validator import (
     verify_evidence_in_document,
-    validate_extracted_policy,
 )
 from app.intelligence.document_processor import (
     process_uploaded_document,
     DocumentProcessingError,
-    detect_file_type,
     MAX_FILE_SIZE_BYTES,
 )
 from app.intelligence.impact_previewer import preview_claim_impact

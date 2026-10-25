@@ -1,7 +1,7 @@
 """Independent regression coverage for the final engineering audit."""
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import json
@@ -9,13 +9,12 @@ import os
 import subprocess
 import sys
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.db.store import store, DataStore
-from app.domain.models import Case, CaseItem, ProposedPolicyChange, Rule, RuleEffect, RuleStatus, Target, OfficialPolicySource, utc_now
+from app.domain.models import Case, CaseItem, ProposedPolicyChange, Rule, RuleEffect, Target, OfficialPolicySource
 from app.engine.checker import evaluate_case
 from app.engine.matcher import match_insurer, match_plan
 from app.intelligence.document_processor import process_uploaded_document, DocumentProcessingError
@@ -23,7 +22,7 @@ from app.intelligence.policy_extractor import _map_dict_to_proposal, _determinis
 from app.intelligence.impact_previewer import preview_claim_impact
 from app.intelligence.policy_diff import compute_policy_diff
 from app.connectors.change_detector import check_source_for_changes
-from app.connectors.official_policy_source import CMSMedicareConnector, validate_official_url
+from app.connectors.official_policy_source import CMSMedicareConnector
 from app.connectors.base import SourceAccessError, SourceError
 
 client = TestClient(app, headers={"X-Synthetic-Data": "true"})
@@ -80,6 +79,20 @@ def seed():
 def test_engine_boundaries(insurer, plan, item_type, code, service_date, expected):
     r = rule(effect="excluded", effective_from=date(2026, 11, 1))
     c = claim(insurer=insurer, plan=plan, service_date=service_date, items=[CaseItem(type=item_type, code=code, name="J1234 matching name must not bypass code")])
+    assert evaluate_case(c, [r]).results[0].result == expected
+
+
+@pytest.mark.parametrize("rule_system,item_system,expected", [
+    ("HCPCS", "HCPCS", "Not covered"),
+    ("hcpcs", "HCPCS", "Not covered"),
+    (None, None, "Not covered"),
+    ("HCPCS", "CPT", "No rule found, verify with the insurer"),
+    ("HCPCS", None, "No rule found, verify with the insurer"),
+    (None, "HCPCS", "No rule found, verify with the insurer"),
+])
+def test_code_system_must_match_when_declared(rule_system, item_system, expected):
+    r = rule(effect="excluded", target=Target(type="drug", code="J1234", code_system=rule_system))
+    c = claim(items=[CaseItem(type="drug", code="J1234", code_system=item_system)])
     assert evaluate_case(c, [r]).results[0].result == expected
 
 
@@ -385,6 +398,15 @@ def test_worker_lock_rejects_second_process(monkeypatch, tmp_path):
     scheduler.release_worker_lock()
     scheduler.acquire_worker_lock()
     scheduler.release_worker_lock()
+
+
+def test_worker_lock_follows_state_path(monkeypatch, tmp_path):
+    import app.connectors.scheduler as scheduler
+    monkeypatch.delenv("COVERAGEGUARD_WORKER_LOCK", raising=False)
+    monkeypatch.setenv("COVERAGEGUARD_STATE_PATH", str(tmp_path / "a.sqlite3"))
+    assert scheduler._default_worker_lock_path() == tmp_path / "a.sqlite3.lock"
+    monkeypatch.setenv("COVERAGEGUARD_STATE_PATH", "")
+    assert scheduler._default_worker_lock_path().name == "worker.lock"
 
 
 def test_unfamiliar_pdf_upload_to_approval_to_alert_audit_end_to_end():

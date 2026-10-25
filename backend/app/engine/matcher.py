@@ -18,7 +18,7 @@ STRICT ADJUDICATION RULES:
 
 from datetime import date
 from typing import Dict, List, Optional, Set, Any
-from app.domain.models import Rule, RuleStatus, Case, CaseItem, ProposedPolicyChange
+from app.domain.models import Rule, ProposedPolicyChange
 
 # Verified Insurer Identity Aliases
 INSURER_ALIASES: Dict[str, Set[str]] = {
@@ -86,6 +86,17 @@ def match_item_code(code_a: Optional[str], code_b: Optional[str]) -> bool:
     if not norm_a or not norm_b:
         return False
     return norm_a == norm_b
+
+
+def match_code_system(rule_system: Optional[str], item_system: Optional[str]) -> bool:
+    """
+    Strict code system matching (CPT, HCPCS, ICD-10...).
+    If either side declares a code system, both must declare the same one.
+    A rule without a code system never applies to a coded claim item.
+    """
+    norm_rule = (rule_system or "").strip().upper()
+    norm_item = (item_system or "").strip().upper()
+    return norm_rule == norm_item
 
 
 def is_rule_applicable_on_date(

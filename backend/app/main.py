@@ -10,16 +10,15 @@ Matches the specification:
 - "Run check now" admin button triggers check and moves 3 open cases from Approved to Needs attention.
 """
 
-import json
 import secrets
 from contextlib import asynccontextmanager
 from starlette.responses import JSONResponse
 import os
 import uuid
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Dict, List, Optional, Literal
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -36,22 +35,18 @@ from app.db.store import store
 from app.domain.models import (
     Alert,
     AlertStatus,
-    AlertTask,
     Case,
     CaseItem,
-    CaseStatusType,
     Diagnosis,
     ExtractedDocumentResult,
     ImpactPreviewResult,
     InsurerConnectionInfo,
     InsurerUpdateEntry,
-    ItemVerdict,
     OfficialPolicySource,
     PolicyBulletin,
-    PolicyDiff,
     ProposedPolicyChange,
-    Rule,
     SourceCheckHistory,
+    is_uploaded_case,
     utc_now,
 )
 from app.connectors.change_detector import check_source_for_changes
@@ -283,8 +278,11 @@ class AnalyzeIntakePayload(BaseModel):
     selected_insurer_id: Optional[str] = None
     selected_insurer_name: Optional[str] = None
     selected_plan_id: Optional[str] = None
-    policy_environment: Literal["official", "demo"] = "official"
+    # "auto" follows the plan: DEMO-* plans use simulated rules, all others official evidence.
+    policy_environment: Literal["auto", "official", "demo"] = "auto"
     reviewed_claim: Optional[ReviewedIntakeClaim] = None
+    # Re-check the insurer sources that govern this claim before evaluating it.
+    refresh_sources: bool = False
 
 
 @app.post("/api/intake/analyze")
@@ -293,6 +291,7 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
     from app.intake.local_parser import (
         INSURER_NAMES,
         claim_missing_fields,
+        infer_policy_environment,
         normalize_date,
     )
     from app.engine.matcher import normalize_insurer_id
@@ -374,9 +373,12 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
         item.code_system = (
             item.code_system.strip().upper() if item.code_system else None
         )
+    environment = payload.policy_environment
+    if environment == "auto":
+        environment = infer_policy_environment(details.get("plan_id"))
     provisional = Case(
         case_id="PROVISIONAL",
-        policy_environment=payload.policy_environment,
+        policy_environment=environment,
         insurer_id=insurer_id,
         insurer_name=insurer_name,
         plan_id=(details.get("plan_id") or "").strip(),
@@ -398,6 +400,11 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
         prior_approval_ref=authorization,
     )
     missing = claim_missing_fields(provisional)
+    rules_refresh = []
+    if payload.refresh_sources and provisional.insurer_id and provisional.items:
+        from app.connectors.sync_engine import refresh_for_claim
+
+        rules_refresh = refresh_for_claim(provisional)
     report = claim_findings(provisional, store)
     evaluation = evaluate_case(
         provisional, eligible_policy_rules(provisional, store)[0]
@@ -436,6 +443,7 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
         },
         "validation_warnings": list(dict.fromkeys(warnings)),
         "missing_fields": missing,
+        "rules_refresh": rules_refresh,
         "findings": report,
         "check_result": evaluation,
         "bulletin": None,
@@ -445,10 +453,25 @@ def analyze_intake_files(payload: AnalyzeIntakePayload):
 # ---------------------------------------------------------
 # File Upload: Save Case to Caseload
 # ---------------------------------------------------------
+def _claim_identity(case: Case) -> tuple:
+    from app.engine.matcher import normalize_insurer_id
+
+    return (
+        normalize_insurer_id(case.insurer_id),
+        (case.plan_id or "").strip().upper(),
+        (case.member_ref or "").strip().upper(),
+        case.service_date,
+        tuple(sorted(
+            (item.type, item.code.strip().upper(), (item.code_system or "").strip().upper())
+            for item in case.items
+        )),
+    )
+
+
 class UploadCasePayload(BaseModel):
     jurisdiction: Optional[str] = None
     code_system: Optional[str] = None
-    policy_environment: Literal["official", "demo"] = "official"
+    policy_environment: Literal["auto", "official", "demo"] = "auto"
     specialty: str = "Unspecified"
     patient_text: Optional[str] = ""
     prescription_text: Optional[str] = None
@@ -527,10 +550,16 @@ def upload_patient_file(payload: UploadCasePayload):
         payload.documents or [],
     )
 
+    from app.intake.local_parser import infer_policy_environment
+
+    environment = payload.policy_environment
+    if environment == "auto":
+        environment = infer_policy_environment(p_id)
     new_case = Case(
         case_id=new_id,
         jurisdiction=payload.jurisdiction,
-        policy_environment=payload.policy_environment,
+        policy_environment=environment,
+        intake_source="patient_intake",
         insurer_id=ins_id,
         insurer_name=ins_name,
         plan_id=p_id,
@@ -549,18 +578,29 @@ def upload_patient_file(payload: UploadCasePayload):
     # Evaluate deterministically
     from app.engine.findings import claim_findings, eligible_policy_rules
 
+    # Re-filing the same claim updates the earlier upload instead of duplicating it.
+    identity = _claim_identity(new_case)
+    existing = next(
+        (case for case in store.cases.values() if is_uploaded_case(case) and _claim_identity(case) == identity),
+        None,
+    )
+    if existing:
+        new_case.case_id = new_id = existing.case_id
+        new_case.created_at = existing.created_at
+
     eval_res = evaluate_case(new_case, eligible_policy_rules(new_case, store)[0])
     new_case.status = eval_res.status
     store.cases[new_id] = new_case
 
     store.record_audit(
-        "CASE_UPLOADED",
+        "CASE_UPDATED" if existing else "CASE_UPLOADED",
         {"case_id": new_id, "specialty": payload.specialty},
         actor="claims-officer",
     )
 
     return {
         "success": True,
+        "updated": bool(existing),
         "case": new_case,
         "check_result": eval_res,
         "findings": claim_findings(new_case, store),
@@ -629,6 +669,20 @@ def clear_cases():
             alert.closed_reason = "Synthetic caseload cleared."
     store.record_audit("CASES_CLEARED", {"cases_count": 0}, actor="claims-officer")
     return {"success": True, "message": "Caseload cleared; policy history retained."}
+
+
+@app.delete("/api/claims/uploads")
+def clear_uploaded_claims():
+    """Remove claims filed through intake; imported hospital claims and policy history stay."""
+    removed = [case_id for case_id, case in store.cases.items() if is_uploaded_case(case)]
+    for case_id in removed:
+        del store.cases[case_id]
+    for alert in store.alerts.values():
+        if alert.case_id in removed and alert.status == "open":
+            alert.status = AlertStatus.CLOSED
+            alert.closed_reason = "Uploaded claim removed."
+    store.record_audit("UPLOADED_CLAIMS_CLEARED", {"cases_count": len(removed)}, actor="claims-officer")
+    return {"success": True, "removed": len(removed)}
 
 
 @app.post("/api/simulator/reset")
@@ -720,7 +774,7 @@ async def extract_policy_document(request: Request):
         doc_data = process_uploaded_document(file_bytes, filename, mime_type)
     except DocumentProcessingError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail="Failed to process document.")
 
     # Extract policy changes via Gemini

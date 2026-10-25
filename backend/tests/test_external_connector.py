@@ -11,13 +11,12 @@ Validates Feature 8:
 
 import pytest
 import httpx
-from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.domain.models import OfficialPolicySource, SourceCheckHistory, utc_now
-from app.connectors.base import SourceError, SourceTimeoutError, SourceAccessError
+from app.domain.models import OfficialPolicySource
+from app.connectors.base import SourceTimeoutError, SourceAccessError
 from app.connectors.official_policy_source import CMSMedicareConnector
 from app.connectors.change_detector import check_source_for_changes
 from app.connectors.scheduler import start_source_scheduler, stop_source_scheduler

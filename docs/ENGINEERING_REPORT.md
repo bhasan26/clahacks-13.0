@@ -31,7 +31,7 @@ The existing document processing, policy extraction, validation, rule builder, d
 - CMS: endpoints verified against the publisher's OpenAPI at `https://api.coverage.cms.gov/docs/v1/coverage-api.json`, linked by its Swagger client. NCD and final LCD reports provide discovery; detail URLs use documented identifiers/versions. Only explicit same-host next URLs are followed where report token parameters are undocumented. Documented related-document and primary-jurisdiction endpoints support bounded pagination. LCD metadata retains associated billing article references and MAC/state information when accessible. Activation requires explicit billing-article and jurisdiction review; neither is inferred from a national index.
 - Demo: reads fixed loopback `/policies` and `/policies/{id}` from an independently persisted service. It does not read CoverageGuard's rule store. Structured synthetic scope is validated against catalog identity before staging, and still requires human approval.
 
-Caseload queries remain local. They include only insurer/plan/environment, code, medical topic and jurisdiction. Outbound catalog requests do not receive patient names, member references, diagnoses, clinical documents or claim records. Discovery matches metadata before fetching documents. Missing code metadata may select topic candidates but cannot establish applicability. Default five documents per source/run, maximum twenty; unprocessed/retry candidates take precedence to avoid starvation. Catalog metadata is searchable across the complete store before the 500-result response limit, including insurer, plan and jurisdiction.
+Caseload queries remain local. They include only insurer/plan/environment, code, medical topic and jurisdiction. Outbound catalog requests do not receive patient names, member references, diagnoses, clinical documents or claim records. Discovery matches metadata before fetching documents. Missing code metadata may select topic candidates but cannot establish applicability. Default five documents per source/run (twenty for the local synthetic service), maximum twenty; unprocessed/retry candidates take precedence to avoid starvation. Catalog metadata is searchable across the complete store before the 500-result response limit, including insurer, plan and jurisdiction.
 
 `policy_http.py` enforces approved HTTPS hosts, no URL credentials, each redirect hop, explicit-port restrictions, bounded streaming (10 MB), 20-second request/10-second connection timeouts, three temporary-failure attempts with backoff, long Retry-After deferral, throttling and five-minute metadata caching. Authorization headers are removed on cross-host redirects. Robots matching supports user-agent specificity, longest matching paths, wildcard and end anchors. The documented CMS programmatic API is treated as an API rather than a crawler; this grants no authentication bypass. Error reports exclude raw provider responses and credentials. Simulator URLs must be fixed `127.0.0.1` HTTP origins with explicit ports and no paths/queries/credentials.
 
@@ -39,7 +39,7 @@ Publisher permission is distinct from technical reachability. After researching 
 
 ## Actual official-source verification
 
-Final gate-respecting execution is recorded in [live-sources.json](verification/sync/live-sources.json). Earlier technical observations are preserved separately in [technical-source-observations.json](verification/sync/technical-source-observations.json), explicitly marked as preceding the terms restriction. They do not establish authorized ongoing access.
+Final gate-respecting execution is recorded in [live-sources.json](../verification/sync/live-sources.json). Earlier technical observations are preserved separately in [technical-source-observations.json](../verification/sync/technical-source-observations.json), explicitly marked as preceding the terms restriction. They do not establish authorized ongoing access.
 
 | Insurer/source and URL | Type | Discovery | Document retrieval | Usable verified rules | Exact plan/jurisdiction | Complete claim check |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -108,10 +108,10 @@ New tests cover exact UHC/Aetna/affiliate/Medicare isolation, wrong plan/region/
 
 Scripts and recorded artifacts:
 
-- `backend/tests/run_sync_demo_e2e.py` → [demo-http-e2e.json](verification/sync/demo-http-e2e.json).
-- `backend/tests/run_scheduled_demo_e2e.py` → [scheduled-http-e2e.json](verification/sync/scheduled-http-e2e.json).
-- `backend/tests/verify_sources_live.py` → [live-sources.json](verification/sync/live-sources.json).
-- `scripts/run_demo.sh` starts the four local processes. [README.md](README.md) gives commands, exact scenario and expected counts. HTTP demo scripts reset only the selected synthetic workspace; use an isolated instance.
+- `backend/tests/run_sync_demo_e2e.py` → [demo-http-e2e.json](../verification/sync/demo-http-e2e.json).
+- `backend/tests/run_scheduled_demo_e2e.py` → [scheduled-http-e2e.json](../verification/sync/scheduled-http-e2e.json).
+- `backend/tests/verify_sources_live.py` → [live-sources.json](../verification/sync/live-sources.json).
+- `scripts/run_demo.sh` starts the four local processes. [README.md](../README.md) gives commands, exact scenario and expected counts. HTTP demo scripts reset only the selected synthetic workspace; use an isolated instance.
 
 ## Changed implementation files
 

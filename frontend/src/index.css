@@ -1,26 +1,95 @@
 @import "tailwindcss";
 
+/* Design tokens. Use these utilities (text-ink, bg-brand, border-line, bg-ok-soft…) instead of raw hex values. */
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Neutrals on a soft mint canvas */
+  --color-ink: #13231C;
+  --color-ink-2: #2F3F38;
+  --color-muted: #4E5F57;
+  --color-subtle: #6B7C74;
+  --color-line: #E4ECE8;
+  --color-line-strong: #CFDCD5;
+  --color-canvas: #EEF5F1;
+  --color-surface: #FFFFFF;
+  --color-sunken: #F6FAF8;
+
+  /* Brand green: links, focus, highlights */
+  --color-brand: #1F8A5F;
+  --color-brand-hover: #187150;
+  --color-brand-ink: #0F4A34;
+  --color-brand-soft: #E3F3EB;
+  --color-brand-tint: #A8DCC3;
+
+  /* Coral: primary actions and the active page */
+  --color-cta: #E8604F;
+  --color-cta-hover: #D24E3E;
+  --color-cta-soft: #FDEDEA;
+  --color-cta-ink: #9A3326;
+
+  /* Status (always paired with an icon and a label) */
+  --color-ok: #1F8A5F;
+  --color-ok-soft: #E3F3EB;
+  --color-ok-line: #B5E2CB;
+  --color-warn: #B25E09;
+  --color-warn-soft: #FFF6E6;
+  --color-warn-line: #F7D9A4;
+  --color-bad: #C2362B;
+  --color-bad-soft: #FDEEEC;
+  --color-bad-line: #F6C6C0;
+  --color-unknown: #4E5F57;
+  --color-unknown-soft: #EFF3F1;
+  --color-unknown-line: #CFDCD5;
+  --color-demo: #6941C6;
+  --color-demo-soft: #F4F1FD;
+  --color-demo-line: #DCD2FA;
+
+  --radius-card: 1.25rem;
+  --shadow-card: 0 1px 2px rgb(19 35 28 / 0.04), 0 8px 24px -12px rgb(19 35 28 / 0.10);
+}
+
 @layer base {
-  body {
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  html {
+    -webkit-font-smoothing: antialiased;
   }
-  code, pre {
-    font-family: 'JetBrains Mono', monospace;
+  body {
+    @apply bg-canvas text-ink font-sans;
+    font-feature-settings: "ss01";
+  }
+  code,
+  pre,
+  kbd {
+    @apply font-mono;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--color-brand-tint);
+    color: var(--color-brand-ink);
   }
 }
 
-/* Custom scrollbars for clean light dashboard */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #F4F5F7;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #CBD5E1;
+  background: var(--color-line-strong);
   border-radius: 9999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #94A3B8;
 }

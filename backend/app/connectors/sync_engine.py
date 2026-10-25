@@ -1,6 +1,6 @@
 """Caseload-filtered discovery and retry-safe document staging. No claim data is sent out."""
 
-import hashlib, json, os, re, threading, uuid
+import hashlib, html, json, os, re, threading, uuid
 from datetime import timedelta
 from app.domain.models import ProposedPolicyChange, ExtractedDocumentResult, utc_now
 from app.domain.sync_models import SyncRun, PolicyDocumentVersion
@@ -75,8 +75,13 @@ def _document(download):
             # Preserve publisher field labels/values; never manufacture a coverage effect.
             from bs4 import BeautifulSoup
 
+            def readable(value):
+                # CMS returns HTML that is itself entity-escaped (&lt;p&gt;); unescape before stripping tags.
+                value = html.unescape(str(value))
+                return BeautifulSoup(value, "html.parser").get_text(" ", strip=True) if "<" in value else value
+
             text = "\n\n".join(
-                f"{key}: {BeautifulSoup(str(value), 'html.parser').get_text(' ', strip=True) if '<' in str(value) else str(value)}"
+                f"{key}: {readable(value)}"
                 for row in rows
                 for key, value in row.items()
                 if value is not None
@@ -195,7 +200,7 @@ def _stage(candidate, connector, run, generation=None):
         p.requires_billing_articles = candidate.requires_billing_articles
         p.catalog_id = candidate.catalog_id
         p.source_revision = candidate.revision
-        p.source_url = candidate.source_url
+        p.source_url = candidate.metadata.get("publisher_page_url") or candidate.source_url
         p.validation_warnings.extend(doc.get("warnings", []))
         p.source_synced_at = utc_now()
         p.jurisdictions = p.jurisdictions or candidate.jurisdictions
@@ -281,7 +286,7 @@ def _stage(candidate, connector, run, generation=None):
             raise
 
 
-def sync_policies(source_id=None, claim_id=None, catalog_ids=None, connectors=None):
+def sync_policies(source_id=None, claim_id=None, catalog_ids=None, connectors=None, cases=None):
     ensure_sources(store)
     if not _SYNC_LOCK.acquire(blocking=False):
         return {"status": "already_running", "runs": []}
@@ -289,11 +294,12 @@ def sync_policies(source_id=None, claim_id=None, catalog_ids=None, connectors=No
         registry = connectors or connector_registry()
         if source_id and source_id not in registry:
             raise ValueError("Unknown policy source.")
-        cases = (
-            [store.cases[claim_id]]
-            if claim_id and claim_id in store.cases
-            else list(store.cases.values())
-        )
+        if cases is None:
+            cases = (
+                [store.cases[claim_id]]
+                if claim_id and claim_id in store.cases
+                else list(store.cases.values())
+            )
         queries = queries_for_cases(cases)
         runs = []
         generation = store._generation
@@ -384,11 +390,13 @@ def sync_policies(source_id=None, claim_id=None, catalog_ids=None, connectors=No
                         or utc_now() - timedelta(days=36500),
                     )
                 )
+                # The budget protects real publishers; the local synthetic service needs no throttling.
+                default_limit = "20" if source.is_synthetic else "5"
                 limit = max(
                     1,
                     min(
                         20,
-                        int(os.environ.get("COVERAGEGUARD_SYNC_DOCUMENT_LIMIT", "5")),
+                        int(os.environ.get("COVERAGEGUARD_SYNC_DOCUMENT_LIMIT", default_limit)),
                     ),
                 )
                 if len(selected) > limit:
@@ -488,3 +496,50 @@ def sync_policies(source_id=None, claim_id=None, catalog_ids=None, connectors=No
         return {"status": "completed", "runs": runs}
     finally:
         _SYNC_LOCK.release()
+
+
+# Official publishers are rate limited; a source confirmed this recently is not re-fetched.
+OFFICIAL_REFRESH_MIN_AGE = timedelta(minutes=10)
+
+
+def refresh_for_claim(case, connectors=None):
+    """Re-check only the sources that can govern this claim before it is evaluated.
+
+    The claim itself (unsaved or saved) only shapes public search keys; patient
+    identifiers and clinical text are never sent. Access gates still apply.
+    """
+    ensure_sources(store)
+    registry = connectors or connector_registry()
+    results = []
+    for sid, connector in registry.items():
+        source = store.sync_sources.get(sid, connector.source)
+        if case.policy_environment == "demo":
+            if not source.is_synthetic:
+                continue
+        elif source.is_synthetic or normalize_insurer_id(source.insurer_id) != normalize_insurer_id(case.insurer_id):
+            continue
+        row = {"source_id": sid, "name": source.name}
+        if source.status == "authorization_required":
+            results.append({**row, "status": "authorization_required", "checked_at": source.last_success_at})
+            continue
+        if (
+            not source.is_synthetic
+            and source.last_success_at
+            and utc_now() - source.last_success_at < OFFICIAL_REFRESH_MIN_AGE
+        ):
+            results.append({**row, "status": "recently_checked", "checked_at": source.last_success_at})
+            continue
+        outcome = sync_policies(sid, connectors=registry, cases=[case])
+        run = (outcome.get("runs") or [None])[0]
+        results.append(
+            {
+                **row,
+                # "already_running" means a scheduled sync holds the lock; its results land shortly.
+                "status": run.status if run else outcome.get("status", "unknown"),
+                "checked_at": store.sync_sources[sid].last_success_at,
+                "changed": run.changed if run else 0,
+                "error": run.error if run else None,
+            }
+        )
+    return results
+

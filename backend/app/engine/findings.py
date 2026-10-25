@@ -1,9 +1,57 @@
 """Hospital-side findings. Never a claim approval, denial, submission or payment promise."""
 
 from datetime import timedelta
-from app.domain.models import utc_now
+from app.domain.models import is_uploaded_case, utc_now
 from app.engine.checker import evaluate_case
-from app.engine.matcher import normalize_insurer_id
+from app.engine.matcher import (
+    match_code_system,
+    match_insurer,
+    match_item_code,
+    match_jurisdiction,
+    match_plan,
+    normalize_insurer_id,
+)
+
+PENDING_REVIEW_STATES = {"pending_review", "needs_correction"}
+
+
+def pending_policy_changes(case, item, db):
+    """Detected policy changes for this item that a reviewer has not approved yet.
+
+    They never change the finding; they warn that the approved rule may be outdated.
+    Scope is matched leniently where the proposal is still incomplete (no plan or
+    code system yet) because missing a real change costs more than an extra warning.
+    """
+    changes = []
+    for p in db.proposals.values():
+        if p.review_state not in PENDING_REVIEW_STATES:
+            continue
+        if p.is_synthetic and case.policy_environment != "demo":
+            continue
+        if not match_insurer(p.insurer_id, case.insurer_id):
+            continue
+        if p.plan_ids and not match_plan(p.plan_ids, case.plan_id):
+            continue
+        if p.target_type != item.type or not match_item_code(p.target_code, item.code):
+            continue
+        if p.code_system and not match_code_system(p.code_system, item.code_system):
+            continue
+        if not match_jurisdiction(p.jurisdictions, case.jurisdiction):
+            continue
+        changes.append(
+            {
+                "proposal_id": p.proposal_id,
+                "policy_reference": p.policy_reference or p.policy_title,
+                "change_type": p.change_type,
+                "proposed_effect": p.proposed_effect.value if p.proposed_effect else None,
+                "effective_from": p.effective_from,
+                "detected_at": p.created_at,
+                "is_synthetic": p.is_synthetic,
+                "supporting_quote": p.supporting_quote[:300],
+                "source_url": p.source_url,
+            }
+        )
+    return sorted(changes, key=lambda c: c["detected_at"], reverse=True)
 
 
 def eligible_policy_rules(case, db):
@@ -78,9 +126,7 @@ def policy_gap_reason(case, item, db):
             f"No approved policy matches {item.type} code {item.code or '(missing)'}.",
         ),
         (
-            lambda r: (
-                not r.target.code_system or r.target.code_system == item.code_system
-            ),
+            lambda r: match_code_system(r.target.code_system, item.code_system),
             f"No approved policy matches code system {item.code_system or '(missing)'}.",
         ),
     ]:
@@ -88,6 +134,14 @@ def policy_gap_reason(case, item, db):
         if not rules:
             return reason
     return f"No current, fresh, unambiguous approved policy applies on service date {case.service_date or '(missing)'}. Check effective dates, source freshness and policy review status."
+
+
+def _policy_checked_at(rule, db):
+    """When the governing rule's source was last confirmed current."""
+    if not rule:
+        return None
+    catalog = db.policy_catalog.get(rule.catalog_id) if rule.catalog_id else None
+    return (catalog.last_successful_sync if catalog else None) or rule.source_synced_at
 
 
 def claim_findings(case, db):
@@ -110,7 +164,17 @@ def claim_findings(case, db):
     if case.policy_environment == "demo":
         status = status.replace("verified checked rules", "SIMULATED checked rules")
     records = []
+    pending_total = 0
     for verdict in evaluation.results:
+        pending = pending_policy_changes(case, verdict.item, db)
+        pending_total += len(pending)
+        for change in pending:
+            effect = (change["proposed_effect"] or change["change_type"]).replace("_", " ")
+            gaps.append(
+                f"Policy change detected {change['detected_at']:%d %b %Y} for {verdict.item.code}, awaiting review: "
+                f"{effect}{' effective ' + format(change['effective_from'], '%d %b %Y') if change['effective_from'] else ''}. "
+                "This claim may be affected; findings use the currently approved rule until the change is reviewed."
+            )
         rule = next(
             (
                 r
@@ -155,6 +219,8 @@ def claim_findings(case, db):
                 if not rule
                 else None,
                 "follow_up": verdict.what_to_do,
+                "pending_changes": pending,
+                "policy_checked_at": _policy_checked_at(rule, db),
             }
         )
     if unknown:
@@ -178,7 +244,9 @@ def claim_findings(case, db):
         "status": status,
         "policy_environment": case.policy_environment,
         "is_synthetic_patient": case.is_synthetic,
+        "is_uploaded": is_uploaded_case(case),
         "issues_count": len(issues),
+        "pending_changes_count": pending_total,
         "findings": records,
         "coverage_gaps": list(dict.fromkeys(gaps)),
         "checked_at": utc_now(),

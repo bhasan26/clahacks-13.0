@@ -5,7 +5,7 @@ Unit tests for Explainable Action Center, Alerts, and Clinical Intake enhancemen
 from fastapi.testclient import TestClient
 from app.main import app
 from app.db.store import store
-from app.domain.models import Alert, AlertChange, AlertStatus, AlertTask, utc_now
+from app.domain.models import Alert, AlertChange, AlertStatus, AlertTask
 from app.intake.analyzer import redact_sensitive_identifiers, analyze_clinical_document
 
 client = TestClient(app, headers={"X-Synthetic-Data": "true"})

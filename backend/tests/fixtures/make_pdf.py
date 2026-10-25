@@ -42,7 +42,7 @@ def create_simple_pdf(text_lines: list[str]) -> bytes:
         body += obj
 
     xref_offset = len(body)
-    xref = f"xref\n0 6\n0000000000 65535 f \n".encode("latin-1")
+    xref = "xref\n0 6\n0000000000 65535 f \n".encode("latin-1")
     for off in offsets[1:]:
         xref += f"{off:010d} 00000 n \n".encode("latin-1")
 

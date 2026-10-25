@@ -27,6 +27,8 @@ from app.engine.findings import claim_findings
 from simulators.hospital import app as hospital_app, synthetic_claims
 from simulators.insurer import app as insurer_app, baseline, SimulatorState
 
+DEMO_POLICIES = len(baseline()["policies"])
+
 client = TestClient(app, headers={"X-Synthetic-Data": "true"})
 
 
@@ -105,11 +107,11 @@ def test_two_independent_service_import_restriction_delay_workflow(services):
         "/api/policy-sync/run", json={"source_id": "demo-insurer-api"}
     )
     assert response.status_code == 200, response.text
-    assert response.json()["runs"][0]["changed"] == 5
+    assert response.json()["runs"][0]["changed"] == DEMO_POLICIES
     assert not any(
         r.catalog_id for r in store.rules.values()
     )  # unapproved proposals have no effect
-    assert len(activate_pending()) == 5
+    assert len(activate_pending()) == DEMO_POLICIES
     assert (
         client.get("/api/claims/H-001/findings").json()["status"].startswith("No issue")
     )
@@ -149,7 +151,7 @@ def test_two_independent_service_import_restriction_delay_workflow(services):
     run = client.post(
         "/api/policy-sync/run", json={"source_id": "demo-insurer-api"}
     ).json()["runs"][0]
-    assert run["changed"] == 1 and run["unchanged"] == 4
+    assert run["changed"] == 1 and run["unchanged"] == DEMO_POLICIES - 1
     assert store.rules == prior
     activated = activate_pending()
     assert len(activated) == 1 and activated[0]["rule"]["version"] == 2
@@ -339,7 +341,7 @@ def test_failed_extraction_keeps_download_for_retry_and_one_proposal(services):
         first = sync_policies(
             "demo-insurer-api", connectors={"demo-insurer-api": connector}
         )
-        assert first["runs"][0].failed == 5 and fetch.call_count == 5
+        assert first["runs"][0].failed == DEMO_POLICIES and fetch.call_count == DEMO_POLICIES
     assert not store.proposals
     assert all(
         c.processed_hash is None and c.metadata.get("_retry_document")
@@ -353,18 +355,18 @@ def test_failed_extraction_keeps_download_for_retry_and_one_proposal(services):
         second = sync_policies(
             "demo-insurer-api", connectors={"demo-insurer-api": connector}
         )
-    assert second["runs"][0].changed == 5 and len(store.proposals) == 5
+    assert second["runs"][0].changed == DEMO_POLICIES and len(store.proposals) == DEMO_POLICIES
     third = sync_policies(
         "demo-insurer-api", connectors={"demo-insurer-api": connector}
     )
-    assert third["runs"][0].unchanged == 5 and len(store.proposals) == 5
+    assert third["runs"][0].unchanged == DEMO_POLICIES and len(store.proposals) == DEMO_POLICIES
 
 
 def test_concurrent_sync_and_duplicate_publication_do_not_duplicate(services):
     client.post("/api/demo/import-hospital")
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: sync_policies("demo-insurer-api"), range(4)))
-    assert len(store.proposals) == 5
+    assert len(store.proposals) == DEMO_POLICIES
     assert any(r["status"] == "completed" for r in results)
     activate_pending()
     for _ in range(2):
@@ -401,8 +403,8 @@ def test_sqlite_persistence_catalog_versions_sync_runs_and_legacy_json_migration
     restored = DataStore()
     assert (
         len(restored.cases) == 40
-        and len(restored.policy_catalog) == 5
-        and len(restored.policy_versions) == 5
+        and len(restored.policy_catalog) == DEMO_POLICIES
+        and len(restored.policy_versions) == DEMO_POLICIES
     )
     assert restored.sync_runs and all(
         p.review_state == "approved" for p in restored.proposals.values()
@@ -424,7 +426,7 @@ def test_sqlite_persistence_catalog_versions_sync_runs_and_legacy_json_migration
     monkeypatch.setenv("COVERAGEGUARD_STATE_PATH", str(new_path))
     migrated = DataStore()
     migrated.save_checkpoint()
-    assert new_path.exists() and len(migrated.policy_catalog) == 5 and legacy.exists()
+    assert new_path.exists() and len(migrated.policy_catalog) == DEMO_POLICIES and legacy.exists()
 
 
 def test_robots_wildcard_disallow_prevents_anthem_pdf_download():
@@ -606,9 +608,9 @@ def test_document_budget_progresses_instead_of_repeating_first_documents(
 ):
     client.post("/api/demo/import-hospital")
     monkeypatch.setenv("COVERAGEGUARD_SYNC_DOCUMENT_LIMIT", "1")
-    for _ in range(5):
+    for _ in range(DEMO_POLICIES):
         sync_policies("demo-insurer-api")
-    assert len(store.proposals) == 5 and all(
+    assert len(store.proposals) == DEMO_POLICIES and all(
         c.processed_hash for c in store.policy_catalog.values()
     )
 
@@ -622,14 +624,14 @@ def test_failed_download_records_backoff_and_retry(services):
         first = sync_policies(
             "demo-insurer-api", connectors={"demo-insurer-api": connector}
         )
-    assert first["runs"][0].failed == 5
+    assert first["runs"][0].failed == DEMO_POLICIES
     s = store.sync_sources["demo-insurer-api"]
     assert s.consecutive_failures == 1
     assert timedelta(seconds=290) < s.next_sync_at - utc_now() < timedelta(seconds=310)
     second = sync_policies(
         "demo-insurer-api", connectors={"demo-insurer-api": connector}
     )
-    assert second["runs"][0].changed == 5 and not s.consecutive_failures
+    assert second["runs"][0].changed == DEMO_POLICIES and not s.consecutive_failures
 
 
 def test_structured_formatting_changes_do_not_duplicate_policy_proposals(services):
@@ -649,7 +651,7 @@ def test_structured_formatting_changes_do_not_duplicate_policy_proposals(service
         result = sync_policies(
             "demo-insurer-api", connectors={"demo-insurer-api": connector}
         )
-    assert result["runs"][0].unchanged == 5 and len(store.proposals) == count
+    assert result["runs"][0].unchanged == DEMO_POLICIES and len(store.proposals) == count
 
 
 def test_lcd_related_metadata_pagination_preserves_opaque_token_as_documented_parameter():
@@ -933,3 +935,34 @@ def test_missing_rule_alert_never_quotes_an_unrelated_pending_policy(services):
     assert alerts and all(
         a.rule_id == "NO_RULE" and a.evidence_quote is None for a in alerts
     )
+
+
+@pytest.mark.parametrize("claim_id,expected", [
+    ("H-002", "Covered"),
+    ("H-013", "Covered"),  # MRI with prior authorization reference
+    ("H-014", "Prior approval needed"),
+    ("H-015", "Covered"),  # physical therapy with referral attached
+    ("H-016", "Document missing"),
+    ("H-017", "Prior approval needed"),
+    ("H-018", "Not covered"),
+    ("H-019", "No rule found, verify with the insurer"),
+    ("H-020", "Covered"),
+    ("H-023", "Covered"),
+    ("H-024", "Prior approval needed"),
+    ("H-025", "Document missing"),  # only one of two required documents
+    ("H-026", "Covered"),
+    ("H-027", "Covered"),
+    ("H-028", "Not covered"),
+    ("H-033", "Document missing"),
+    ("H-034", "Covered"),
+    ("H-035", "Covered"),
+    ("H-036", "Covered"),
+    ("H-037", "Not covered"),  # knee osteoarthritis diagnosis
+    ("H-038", "No rule found, verify with the insurer"),  # meniscus tear is outside the rule
+])
+def test_varied_demo_claims_show_each_kind_of_result(services, claim_id, expected):
+    client.post("/api/demo/import-hospital")
+    sync_policies("demo-insurer-api")
+    activate_pending()
+    findings = client.get(f"/api/claims/{claim_id}/findings").json()["findings"]
+    assert findings[0]["result"] == expected

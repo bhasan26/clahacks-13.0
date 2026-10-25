@@ -4,6 +4,10 @@ import json, os
 from pathlib import Path
 import httpx
 
+from simulators.insurer import baseline
+
+DEMO_POLICIES = len(baseline()["policies"])
+
 BASE = os.environ.get("COVERAGEGUARD_E2E_URL", "http://127.0.0.1:8011")
 
 
@@ -53,8 +57,8 @@ def run():
             }
         )
         result = post("/api/policy-sync/run", {"source_id": "demo-insurer-api"})
-        assert result["runs"][0]["changed"] == 5
-        assert len(activate()) == 5
+        assert result["runs"][0]["changed"] == DEMO_POLICIES
+        assert len(activate()) == DEMO_POLICIES
         log.append(
             {
                 "step": "sync_and_review_baseline",
@@ -124,14 +128,14 @@ def run():
             for a in alerts
         )
         result = post("/api/policy-sync/run", {"source_id": "demo-insurer-api"})
-        assert result["runs"][0]["unchanged"] == 5 and not result["runs"][0]["changed"]
+        assert result["runs"][0]["unchanged"] == DEMO_POLICIES and not result["runs"][0]["changed"]
         log.append(
             {
                 "step": "delay_reviewed",
                 "version": 3,
                 "unrelated_authorization_retained": True,
                 "resolved_alerts_closed": True,
-                "repeat_sync_unchanged": 5,
+                "repeat_sync_unchanged": DEMO_POLICIES,
             }
         )
         report = {

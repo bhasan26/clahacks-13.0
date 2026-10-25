@@ -45,13 +45,13 @@ The action center displays only open actual alerts. Closed exclusions no longer 
 | D. Missing plan/insurer/procedure | Specific missing-field warnings; absent values remain blank; no default Demo Insurance Co., generated member ID or generic Patient Record verdict. |
 | E. Official mode, no verified UHC policy | Unable to verify; explicit missing official-policy reason; no simulated fallback. |
 
-Recorded browser/HTTP evidence: [verification/intake/pdf-http-e2e.json](verification/intake/pdf-http-e2e.json). Test code: [backend/tests/test_patient_pdf_intake.py](backend/tests/test_patient_pdf_intake.py).
+Recorded browser/HTTP evidence: [verification/intake/pdf-http-e2e.json](../verification/intake/pdf-http-e2e.json). Test code: [backend/tests/test_patient_pdf_intake.py](../backend/tests/test_patient_pdf_intake.py).
 
 ## Test it in the UI
 
 1. Open Claims → **Local clinical file / card intake**.
 2. Select **DEMO / SIMULATED policies** explicitly.
-3. Upload [synthetic_uhc_knee_claim.pdf](backend/tests/fixtures/synthetic_uhc_knee_claim.pdf), or paste the [text fixture](backend/tests/fixtures/synthetic_uhc_knee_claim.txt).
+3. Upload [synthetic_uhc_knee_claim.pdf](../backend/tests/fixtures/synthetic_uhc_knee_claim.pdf), or paste the [text fixture](../backend/tests/fixtures/synthetic_uhc_knee_claim.txt).
 4. Click **Extract locally & check policies**. Review insurer `uhc`, plan `DEMO-UHC-PPO`, state `CA`, member `SYNTHETIC-001`, procedure `27447` / `CPT`, service date `2026-11-12`, and authorization `PA-DEMO-001`.
 5. Inspect findings and evidence. If you edit a field, click **Recheck corrected details**, then **File reviewed case to caseload**.
 6. Clear the plan and recheck to see its specific warning; restore it and recheck. Switch to official mode and recheck to confirm the honest missing-policy result.
